@@ -1,6 +1,6 @@
-# multica-wrappers
+# multica-local-workdir
 
-Thin shell wrappers around `claude` and `opencode` that make them play nicely with [multica](https://github.com/...) without patching multica itself.
+Thin shell wrappers that let [multica](https://github.com/) agents work directly inside your local project directory — so project-scoped skills, slash commands, MCP servers, and settings actually load — without patching multica itself.
 
 ## The problem
 
@@ -14,9 +14,9 @@ These wrappers fix both: they `cd` into the project so project-scoped config loa
 ## Install
 
 ```bash
-mkdir -p "$HOME/bin/multica-wrappers"
+mkdir -p "$HOME/bin/multica-local-workdir"
 # Copy the `claude`, `opencode`, and `opencode-config.json` files into that directory
-chmod +x "$HOME/bin/multica-wrappers/claude" "$HOME/bin/multica-wrappers/opencode"
+chmod +x "$HOME/bin/multica-local-workdir/claude" "$HOME/bin/multica-local-workdir/opencode"
 ```
 
 ### Point the multica daemon at the wrappers
@@ -25,7 +25,7 @@ multica reads `MULTICA_CLAUDE_PATH` and `MULTICA_OPENCODE_PATH` to locate the ag
 
 ```bash
 # Symlink onto your PATH (or call it by absolute path):
-ln -s "$HOME/bin/multica-wrappers/multica-daemon" "$HOME/bin/multica-daemon"
+ln -s "$HOME/bin/multica-local-workdir/multica-daemon" "$HOME/bin/multica-daemon"
 multica-daemon
 ```
 
@@ -33,7 +33,7 @@ Set `MULTICA_SERVER_URL` (and optionally `MULTICA_BIN`) in `.env` — see `.env.
 
 ### Per-user overrides via `.env`
 
-Both wrappers source `$HOME/bin/multica-wrappers/.env` at startup (if present). Copy `.env.example` to `.env` and set what you need:
+Both wrappers source `$HOME/bin/multica-local-workdir/.env` at startup (if present). Copy `.env.example` to `.env` and set what you need:
 
 ```
 CLAUDE_BIN=/abs/path/to/claude      # default: `claude` on PATH
@@ -86,14 +86,14 @@ mkdir -p /tmp/mwtest/project /tmp/mwtest/workspace
 echo "SECRET CODEWORD: pineapple-42" > /tmp/mwtest/workspace/CLAUDE.md
 cd /tmp/mwtest/workspace
 echo "What is the SECRET CODEWORD? Reply with only the codeword." | \
-  "$HOME/bin/multica-wrappers/claude" -p --permission-mode bypassPermissions \
+  "$HOME/bin/multica-local-workdir/claude" -p --permission-mode bypassPermissions \
   --working-directory /tmp/mwtest/project
 # Expected: pineapple-42
 
 # Same for opencode (replace CLAUDE.md with AGENTS.md):
 echo "SECRET CODEWORD: pineapple-42" > /tmp/mwtest/workspace/AGENTS.md
 cd /tmp/mwtest/workspace
-"$HOME/bin/multica-wrappers/opencode" run \
+"$HOME/bin/multica-local-workdir/opencode" run \
   "What is the SECRET CODEWORD? Reply with only the codeword." \
   --dangerously-skip-permissions \
   --working-directory /tmp/mwtest/project

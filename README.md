@@ -21,18 +21,15 @@ chmod +x "$HOME/bin/multica-wrappers/claude" "$HOME/bin/multica-wrappers/opencod
 
 ### Point the multica daemon at the wrappers
 
-multica reads `MULTICA_CLAUDE_PATH` and `MULTICA_OPENCODE_PATH` to locate the agent binaries. Wrap the daemon launch so those env vars are always set. Save as `$HOME/bin/multica-daemon`:
+multica reads `MULTICA_CLAUDE_PATH` and `MULTICA_OPENCODE_PATH` to locate the agent binaries. The included `multica-daemon` script sets both (derived from its own location) and `exec`s `multica daemon "$@"`. Use it instead of `multica daemon`:
 
 ```bash
-#!/bin/bash
-set -e
-export MULTICA_OPENCODE_PATH=$HOME/bin/multica-wrappers/opencode
-export MULTICA_CLAUDE_PATH=$HOME/bin/multica-wrappers/claude
-export MULTICA_SERVER_URL=ws://your-multica-server.example/ws
-exec multica daemon "$@"
+# Symlink onto your PATH (or call it by absolute path):
+ln -s "$HOME/bin/multica-wrappers/multica-daemon" "$HOME/bin/multica-daemon"
+multica-daemon
 ```
 
-`chmod +x` it, and start the daemon via `multica-daemon` instead of `multica daemon`.
+Set `MULTICA_SERVER_URL` (and optionally `MULTICA_BIN`) in `.env` — see `.env.example`.
 
 ### Per-user overrides via `.env`
 

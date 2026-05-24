@@ -1,6 +1,6 @@
 # multica-local-workdir
 
-Thin shell wrappers that let [multica](https://github.com/) agents work directly inside your local project directory — so project-scoped skills, slash commands, MCP servers, and settings actually load — without patching multica itself.
+Thin shell wrappers that let [multica](https://multica.ai/) agents work directly inside your local project directory — so project-scoped skills, slash commands, MCP servers, and settings actually load — without patching multica itself.
 
 ## The problem
 

@@ -13,15 +13,22 @@ fi
 
 working_dir=""
 
-# Accept --working-directory <path> at the end of the argument list
-if [ "$#" -ge 2 ]; then
-  args=("$@")
-  count="${#args[@]}"
-  if [ "${args[$((count-2))]}" = "--working-directory" ]; then
-    working_dir="${args[$((count-1))]}"
-    set -- "${args[@]:0:$((count-2))}"
+# Extract --working-directory <path> from anywhere in the argument list
+new_args=()
+skip_next=false
+for arg in "$@"; do
+  if [ "$skip_next" = "true" ]; then
+    working_dir="$arg"
+    skip_next=false
+    continue
   fi
-fi
+  if [ "$arg" = "--working-directory" ]; then
+    skip_next=true
+    continue
+  fi
+  new_args+=("$arg")
+done
+set -- "${new_args[@]}"
 
 # Fall back to the env var when the flag isn't provided
 if [ -z "$working_dir" ] && [ ! -z "$LOCAL_WORKING_PATH" ]; then

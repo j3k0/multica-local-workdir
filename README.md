@@ -14,33 +14,36 @@ These wrappers fix both: they `cd` into the project so project-scoped config loa
 ## Install
 
 ```bash
-mkdir -p "$HOME/bin/multica-local-workdir"
-# Copy the `claude`, `opencode`, and `opencode-config.json` files into that directory
-chmod +x "$HOME/bin/multica-local-workdir/claude" "$HOME/bin/multica-local-workdir/opencode"
-```
+# 1. Clone anywhere — the scripts resolve their own location, no copying needed.
+git clone <this-repo-url> multica-local-workdir
+cd multica-local-workdir
 
-### Point the multica daemon at the wrappers
+# 2. Create your .env (at minimum set MULTICA_SERVER_URL).
+cp .env.example .env
+$EDITOR .env
 
-multica reads `MULTICA_CLAUDE_PATH` and `MULTICA_OPENCODE_PATH` to locate the agent binaries. The included `multica-daemon` script sets both (derived from its own location) and `exec`s `multica daemon "$@"`. Use it instead of `multica daemon`:
+# 3. Symlink the daemon wrapper onto your PATH (or call it by absolute path).
+ln -s "$PWD/multica-daemon" "$HOME/bin/multica-daemon"
 
-```bash
-# Symlink onto your PATH (or call it by absolute path):
-ln -s "$HOME/bin/multica-local-workdir/multica-daemon" "$HOME/bin/multica-daemon"
+# 4. (Re)start the daemon — the wrapper sets MULTICA_CLAUDE_PATH /
+#    MULTICA_OPENCODE_PATH from its own location, then execs `multica daemon`.
 multica-daemon
 ```
 
-Set `MULTICA_SERVER_URL` (and optionally `MULTICA_BIN`) in `.env` — see `.env.example`.
+That's it. The `claude`, `opencode`, and `multica-daemon` scripts all source `<repo>/.env` and resolve paths relative to themselves.
 
-### Per-user overrides via `.env`
+### `.env` settings
 
-Both wrappers source `$HOME/bin/multica-local-workdir/.env` at startup (if present). Copy `.env.example` to `.env` and set what you need:
+All optional except `MULTICA_SERVER_URL`. See `.env.example` for the full list:
 
-```
-CLAUDE_BIN=/abs/path/to/claude      # default: `claude` on PATH
-OPENCODE_BIN=/abs/path/to/opencode  # default: `opencode` on PATH
-```
+| Var | Consumed by | Purpose |
+| --- | --- | --- |
+| `MULTICA_SERVER_URL` | `multica-daemon` | WebSocket URL of the multica server |
+| `MULTICA_BIN` | `multica-daemon` | Override the `multica` binary (default: `multica` on PATH) |
+| `CLAUDE_BIN` | `claude` wrapper | Override the `claude` binary (default: `claude` on PATH) |
+| `OPENCODE_BIN` | `opencode` wrapper | Override the `opencode` binary (default: `opencode` on PATH) |
 
-`.env` is gitignored — your local overrides won't be committed.
+`.env` is gitignored.
 
 ### Set agent concurrency to 1
 
@@ -80,20 +83,24 @@ If you already use a custom `OPENCODE_CONFIG` for non-multica work, note that th
 
 ## Quick test
 
+From the cloned repo:
+
 ```bash
+WRAPPERS=$PWD  # run this from the multica-local-workdir checkout
+
 # Sanity test for claude:
 mkdir -p /tmp/mwtest/project /tmp/mwtest/workspace
 echo "SECRET CODEWORD: pineapple-42" > /tmp/mwtest/workspace/CLAUDE.md
 cd /tmp/mwtest/workspace
 echo "What is the SECRET CODEWORD? Reply with only the codeword." | \
-  "$HOME/bin/multica-local-workdir/claude" -p --permission-mode bypassPermissions \
+  "$WRAPPERS/claude" -p --permission-mode bypassPermissions \
   --working-directory /tmp/mwtest/project
 # Expected: pineapple-42
 
 # Same for opencode (replace CLAUDE.md with AGENTS.md):
 echo "SECRET CODEWORD: pineapple-42" > /tmp/mwtest/workspace/AGENTS.md
 cd /tmp/mwtest/workspace
-"$HOME/bin/multica-local-workdir/opencode" run \
+"$WRAPPERS/opencode" run \
   "What is the SECRET CODEWORD? Reply with only the codeword." \
   --dangerously-skip-permissions \
   --working-directory /tmp/mwtest/project

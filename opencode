@@ -37,6 +37,32 @@ fi
 
 if [ ! -z "$working_dir" ] && [ -d "$working_dir" ]; then
   cd "$working_dir"
+
+  # opencode honors --dir over CWD. The daemon passes --dir <workspace>,
+  # so rewrite its value to point at the project, otherwise the cd above
+  # is ignored and project-scoped config doesn't load.
+  rewritten_args=()
+  rewrite_next=false
+  saw_dir=false
+  for arg in "$@"; do
+    if [ "$rewrite_next" = "true" ]; then
+      rewritten_args+=("$working_dir")
+      rewrite_next=false
+      continue
+    fi
+    if [ "$arg" = "--dir" ]; then
+      saw_dir=true
+      rewrite_next=true
+      rewritten_args+=("$arg")
+      continue
+    fi
+    rewritten_args+=("$arg")
+  done
+  if [ "$saw_dir" = "false" ]; then
+    rewritten_args=("--dir" "$working_dir" "${rewritten_args[@]}")
+  fi
+  set -- "${rewritten_args[@]}"
+
   # Pull in the workspace's AGENTS.md (multica agent instructions) via a
   # custom OPENCODE_CONFIG that uses {env:EXTRA_INSTRUCTIONS_PATH} interpolation
   # in its "instructions" array.

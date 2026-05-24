@@ -15,7 +15,7 @@ These wrappers fix those: they `cd` into the project so project-scoped config lo
 ## Install
 
 ```bash
-git clone <this-repo-url> multica-local-workdir
+git clone https://github.com/j3k0/multica-local-workdir.git
 cd multica-local-workdir
 cp .env.example .env   # then edit — set MULTICA_SERVER_URL
 ./multica-daemon

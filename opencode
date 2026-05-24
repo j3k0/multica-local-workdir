@@ -1,0 +1,42 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_DIR="$(pwd)"
+
+# Source optional .env file (e.g. OPENCODE_BIN overrides)
+if [ -f "$SCRIPT_DIR/.env" ]; then
+  set -a
+  . "$SCRIPT_DIR/.env"
+  set +a
+fi
+
+working_dir=""
+
+# Accept --working-directory <path> at the end of the argument list
+if [ "$#" -ge 2 ]; then
+  args=("$@")
+  count="${#args[@]}"
+  if [ "${args[$((count-2))]}" = "--working-directory" ]; then
+    working_dir="${args[$((count-1))]}"
+    set -- "${args[@]:0:$((count-2))}"
+  fi
+fi
+
+# Fall back to the env var when the flag isn't provided
+if [ -z "$working_dir" ] && [ ! -z "$LOCAL_WORKING_PATH" ]; then
+  working_dir="$LOCAL_WORKING_PATH"
+fi
+
+if [ ! -z "$working_dir" ] && [ -d "$working_dir" ]; then
+  cd "$working_dir"
+  # Pull in the workspace's AGENTS.md (multica agent instructions) via a
+  # custom OPENCODE_CONFIG that uses {env:EXTRA_INSTRUCTIONS_PATH} interpolation
+  # in its "instructions" array.
+  if [ -f "$WORKSPACE_DIR/AGENTS.md" ]; then
+    export EXTRA_INSTRUCTIONS_PATH="$WORKSPACE_DIR/AGENTS.md"
+    export OPENCODE_CONFIG="$SCRIPT_DIR/opencode-config.json"
+  fi
+fi
+
+exec "${OPENCODE_BIN:-opencode}" "$@"

@@ -4,12 +4,13 @@ Thin shell wrappers that let [multica](https://multica.ai/) agents work directly
 
 ## The problem
 
-multica creates a per-session **workspace directory** (e.g. `~/multica_workspaces/<uuid>/.../workdir`) and runs the agent CLI from there. Two things break as a result:
+multica creates a per-session **workspace directory** (e.g. `~/multica_workspaces/<uuid>/.../workdir`) and runs the agent CLI from there. As a result:
 
 1. **Project-scoped configuration isn't loaded.** Skills, slash commands, subagents, MCP servers, settings, hooks — everything that lives under `<project>/.claude/` or `<project>/.opencode/` — is keyed strictly off the agent's CWD. Running from the workspace means none of it loads.
 2. **The workspace's instructions file is the only one that loads.** multica writes a `CLAUDE.md` (or `AGENTS.md`) into the workspace with agent-specific behaviour instructions. If you `cd` into the project to fix #1, you lose those.
+3. Dev agents working on large monorepos or heavy setup projects need to go fresh for every session.
 
-These wrappers fix both: they `cd` into the project so project-scoped config loads, then re-inject the workspace's instructions file into the agent's system prompt.
+These wrappers fix those: they `cd` into the project so project-scoped config loads, then re-inject the workspace's instructions file into the agent's system prompt.
 
 ## Install
 

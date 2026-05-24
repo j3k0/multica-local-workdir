@@ -28,13 +28,6 @@ Set `LOCAL_WORKING_PATH=/abs/path/to/project` in the environment multica launche
 
 In each agent's multica configuration, set `concurrency: 1`. Two sessions of the same agent running concurrently would share the same project directory — lock files, git state, and edits would step on each other.
 
-## Quick test
+## Example agent configuration
 
-```bash
-# from the cloned repo:
-WRAPPER=$PWD/claude
-echo "SECRET: pineapple-42" > /tmp/CLAUDE.md
-cd /tmp && LOCAL_WORKING_PATH=/tmp "$WRAPPER" -p --permission-mode bypassPermissions \
-  "What is the SECRET? Reply with just the codeword."
-# Expected: pineapple-42
-```
+![Agent configuration in multica: LOCAL_WORKING_PATH set under Environment, Concurrency set to 1](docs/agent-config.png)

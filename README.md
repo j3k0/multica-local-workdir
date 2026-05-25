@@ -40,7 +40,7 @@ Set `LWD_PROVIDER=<name>` and the `claude` wrapper sources `claude-providers/<na
 Two providers ship as examples:
 
 - **`deepseek`** — DeepSeek's Anthropic-compatible API. Requires `DEEPSEEK_API_KEY` in `.env`.
-- **`ollama`** — local Ollama daemon (also covers Ollama Cloud models like `glm-5.1:cloud`). Requires `ollama signin` for cloud models; no separate key.
+- **`ollama`** — local Ollama daemon. Use any model the daemon can run (e.g. self-hosted `qwen3.6:35b`), or an Ollama Cloud model like `glm-5.1:cloud` (requires `ollama signin`). No separate key in either case.
 
 Add your own by dropping a `claude-providers/<name>.sh` file alongside them. Provider files may honour `LWD_MODEL` to let you switch models without editing the file. Set `LWD_PROVIDER` and `LWD_MODEL` in `.env` as project defaults; values already in the environment (e.g. set per-agent in multica) take precedence.
 

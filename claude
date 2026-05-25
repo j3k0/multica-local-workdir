@@ -4,12 +4,21 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(pwd)"
 
+# Preserve caller-provided LWD_* across .env sourcing — .env is for defaults,
+# values already in the environment (e.g. set per-agent in multica) win.
+_lwd_provider_override="$LWD_PROVIDER"
+_lwd_model_override="$LWD_MODEL"
+
 # Source optional .env file (e.g. CLAUDE_BIN overrides)
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -a
   . "$SCRIPT_DIR/.env"
   set +a
 fi
+
+[ -n "$_lwd_provider_override" ] && LWD_PROVIDER="$_lwd_provider_override"
+[ -n "$_lwd_model_override" ] && LWD_MODEL="$_lwd_model_override"
+unset _lwd_provider_override _lwd_model_override
 
 # Provider selection: LWD_PROVIDER=<name> sources claude-providers/<name>.sh,
 # which is expected to export ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN /

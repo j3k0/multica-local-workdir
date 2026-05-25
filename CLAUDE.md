@@ -34,6 +34,8 @@ Precedence in both wrappers:
 
 The arg is scanned with a loop over all positions, not just `args[count-2]` — the daemon may put it before the prompt positional. If you re-introduce a tail-only check, the flag will silently be ignored when a prompt arg follows.
 
+The same loop in the `claude` wrapper also strips `--strict-mcp-config` when `LWD_ALLOW_MCP=1`. multica injects that flag to disable project/user MCP configs (sandboxing for its SaaS); the opt-in flips it off so self-hosted setups can use `.claude/settings.json` MCP servers. Default off — turning it on bypasses multica's intended sandboxing.
+
 ## Concurrency constraint
 
 Each agent in multica must be configured with `concurrency: 1`. Two sessions sharing the same project directory would collide on git state, lock files, and edits. There is no in-wrapper locking — the constraint is enforced by the operator's multica config.

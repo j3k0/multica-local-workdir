@@ -10,6 +10,7 @@ Three small bash wrappers and an opencode config snippet. No build system, no te
 - `claude` — wrapper around the Claude Code CLI.
 - `opencode` — wrapper around the opencode CLI.
 - `opencode-config.json` — referenced by the `opencode` wrapper via `OPENCODE_CONFIG`; uses `{env:EXTRA_INSTRUCTIONS_PATH}` interpolation so opencode loads the workspace's `AGENTS.md` as an instructions file.
+- `claude-providers/<name>.sh` — sourced by the `claude` wrapper when `LWD_PROVIDER=<name>` is set. Each file exports `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / model defaults to redirect claude at a non-Anthropic backend (DeepSeek, Ollama, …). Files may honour `LWD_MODEL` as a convention to let callers switch models without editing the file. Missing provider names fail loud — silent fallthrough would burn real Anthropic credits on a typo. Provider files reference secrets like `$DEEPSEEK_API_KEY` from `.env` rather than embedding them. `ollama launch claude --model X` was verified empirically to do nothing more than set env vars (so it fits this pattern, no special-casing needed).
 
 ## The core trick (read before editing wrappers)
 

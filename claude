@@ -11,6 +11,20 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
   set +a
 fi
 
+# Provider selection: LWD_PROVIDER=<name> sources claude-providers/<name>.sh,
+# which is expected to export ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN /
+# model defaults to redirect claude at a non-Anthropic backend. Provider
+# files may honor LWD_MODEL to pick a specific model.
+# Fail loud on a missing file rather than silently falling back to Anthropic.
+if [ -n "$LWD_PROVIDER" ]; then
+  provider_file="$SCRIPT_DIR/claude-providers/$LWD_PROVIDER.sh"
+  if [ ! -f "$provider_file" ]; then
+    echo "claude wrapper: LWD_PROVIDER='$LWD_PROVIDER' not found at $provider_file" >&2
+    exit 1
+  fi
+  . "$provider_file"
+fi
+
 working_dir=""
 
 # Extract --working-directory <path> from anywhere in the argument list

@@ -25,6 +25,14 @@ cp .env.example .env   # then edit — set MULTICA_SERVER_URL
 
 Set `LOCAL_WORKING_PATH=/abs/path/to/project` in the environment multica launches agents under. (Alternatively, append `--working-directory <path>` to the agent's extra args in multica's per-agent configuration.)
 
+## Set agent concurrency to 1
+
+In each agent's multica configuration, set `concurrency: 1`. Two sessions of the same agent running concurrently would share the same project directory — lock files, git state, and edits would step on each other.
+
+## Example agent configuration
+
+![Agent configuration in multica: LOCAL_WORKING_PATH set under Environment, Concurrency set to 1](docs/agent-config.png)
+
 ## Routing claude through a different provider
 
 Set `LWD_PROVIDER=<name>` and the `claude` wrapper sources `claude-providers/<name>.sh` before exec'ing the CLI. The provider file is just a bash file that exports `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, model defaults, etc. — claude itself does the rest.
@@ -41,11 +49,3 @@ LWD_PROVIDER=ollama LWD_MODEL=qwen3:cloud ./multica-daemon
 ```
 
 Unknown provider names fail loud rather than silently falling back to Anthropic (which would burn real credits on a typo).
-
-## Set agent concurrency to 1
-
-In each agent's multica configuration, set `concurrency: 1`. Two sessions of the same agent running concurrently would share the same project directory — lock files, git state, and edits would step on each other.
-
-## Example agent configuration
-
-![Agent configuration in multica: LOCAL_WORKING_PATH set under Environment, Concurrency set to 1](docs/agent-config.png)

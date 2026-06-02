@@ -1,0 +1,144 @@
+#!/bin/bash
+set -e
+
+# Switch the global LWD_PROVIDER / LWD_MODEL by editing .env in this directory.
+# Only uncommented assignments are touched (the commented examples in .env are
+# left as documentation). Setting a key that isn't present appends it.
+#
+# Usage:
+#   ./set-provider                       Show current values and available providers
+#   ./set-provider <provider>            Set LWD_PROVIDER (validated against claude-providers/)
+#   ./set-provider <provider> <model>    Set LWD_PROVIDER and LWD_MODEL
+#   ./set-provider -m <model>            Set LWD_MODEL only
+#   ./set-provider none                  Clear LWD_PROVIDER + LWD_MODEL (back to real Anthropic)
+#   ./set-provider --clear-model         Remove LWD_MODEL (let the provider pick its default)
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/.env"
+PROVIDERS_DIR="$SCRIPT_DIR/claude-providers"
+
+die() { echo "set-provider: $*" >&2; exit 1; }
+
+available_providers() {
+  for f in "$PROVIDERS_DIR"/*.sh; do
+    [ -f "$f" ] || continue
+    basename "$f" .sh
+  done
+}
+
+# Print the active (uncommented) value of a key in .env, or nothing.
+get_env_key() {
+  local key="$1" line
+  [ -f "$ENV_FILE" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "${line#"$key"=}" != "$line" ]; then
+      printf '%s\n' "${line#"$key"=}"
+      return 0
+    fi
+  done < "$ENV_FILE"
+}
+
+# Set or replace an uncommented `key=value` line; append if not present.
+set_env_key() {
+  local key="$1" val="$2" line found=0 tmp
+  tmp="$(mktemp)"
+  if [ -f "$ENV_FILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      if [ "${line#"$key"=}" != "$line" ]; then
+        printf '%s=%s\n' "$key" "$val"
+        found=1
+      else
+        printf '%s\n' "$line"
+      fi
+    done < "$ENV_FILE" > "$tmp"
+  fi
+  [ "$found" -eq 0 ] && printf '%s=%s\n' "$key" "$val" >> "$tmp"
+  mv "$tmp" "$ENV_FILE"
+}
+
+# Remove any uncommented `key=...` line.
+clear_env_key() {
+  local key="$1" line tmp
+  [ -f "$ENV_FILE" ] || return 0
+  tmp="$(mktemp)"
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ "${line#"$key"=}" != "$line" ] && continue
+    printf '%s\n' "$line"
+  done < "$ENV_FILE" > "$tmp"
+  mv "$tmp" "$ENV_FILE"
+}
+
+show_status() {
+  local p m
+  p="$(get_env_key LWD_PROVIDER)"
+  m="$(get_env_key LWD_MODEL)"
+  echo "LWD_PROVIDER=${p:-<unset> (real Anthropic)}"
+  echo "LWD_MODEL=${m:-<unset> (provider default)}"
+  echo
+  echo "Available providers:"
+  available_providers | sed 's/^/  /'
+}
+
+provider=""
+model=""
+set_provider=0
+set_model=0
+clear_provider=0
+clear_model=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m|--model)
+      [ $# -ge 2 ] || die "$1 requires a model argument"
+      model="$2"; set_model=1; shift 2 ;;
+    --clear-model)
+      clear_model=1; shift ;;
+    -h|--help)
+      sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*)
+      die "unknown option: $1" ;;
+    *)
+      if [ "$set_provider" -eq 0 ] && [ "$clear_provider" -eq 0 ]; then
+        case "$1" in
+          none|off|anthropic) clear_provider=1 ;;
+          *) provider="$1"; set_provider=1 ;;
+        esac
+      elif [ "$set_model" -eq 0 ]; then
+        model="$1"; set_model=1
+      else
+        die "unexpected argument: $1"
+      fi
+      shift ;;
+  esac
+done
+
+# No arguments: report current state.
+if [ "$set_provider" -eq 0 ] && [ "$set_model" -eq 0 ] && [ "$clear_provider" -eq 0 ] && [ "$clear_model" -eq 0 ]; then
+  show_status
+  exit 0
+fi
+
+[ -f "$ENV_FILE" ] || die "$ENV_FILE not found (copy .env.example to .env first)"
+
+if [ "$set_provider" -eq 1 ]; then
+  [ -f "$PROVIDERS_DIR/$provider.sh" ] || {
+    echo "set-provider: provider '$provider' not found at $PROVIDERS_DIR/$provider.sh" >&2
+    echo "Available providers:" >&2
+    available_providers | sed 's/^/  /' >&2
+    exit 1
+  }
+  set_env_key LWD_PROVIDER "$provider"
+fi
+
+if [ "$clear_provider" -eq 1 ]; then
+  clear_env_key LWD_PROVIDER
+  # Clearing the provider also drops the model override; it only means
+  # something in a provider's context.
+  clear_env_key LWD_MODEL
+fi
+
+[ "$set_model" -eq 1 ] && set_env_key LWD_MODEL "$model"
+[ "$clear_model" -eq 1 ] && clear_env_key LWD_MODEL
+
+echo "Updated $ENV_FILE:"
+show_status

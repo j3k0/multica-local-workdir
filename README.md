@@ -51,3 +51,18 @@ Two providers ship as examples:
 Add your own by dropping a `claude-providers/<name>.sh` file alongside them. Provider files may honour `LWD_MODEL` to let you switch models without editing the file. Set `LWD_PROVIDER` and `LWD_MODEL` in `.env` as project defaults, or per-agent in multica; values already in the environment (e.g. set per-agent in multica) take precedence over the global default.
 
 Unknown provider names fail loud rather than silently falling back to Anthropic (which would burn real credits on a typo).
+
+### Switching providers from the CLI
+
+`set-provider` edits the active `LWD_PROVIDER` / `LWD_MODEL` lines in `.env` for you, so you don't have to hand-edit the file to flip the global default. It only touches uncommented assignments — the commented examples stay as documentation — and validates the provider against `claude-providers/` before writing.
+
+```bash
+./set-provider                                # show current values + available providers
+./set-provider deepseek                       # set LWD_PROVIDER
+./set-provider deepseek 'deepseek-v4-pro[1m]' # set provider + model
+./set-provider -m glm-5.1:cloud               # set LWD_MODEL only
+./set-provider --clear-model                  # drop the model override
+./set-provider none                           # clear both — back to real Anthropic
+```
+
+An unknown provider fails loud and lists the valid names. Per-agent overrides in multica still win over whatever this writes to `.env`.

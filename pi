@@ -1,0 +1,53 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_DIR="$(pwd)"
+
+# Source optional .env file (e.g. PI_BIN overrides)
+if [ -f "$SCRIPT_DIR/.env" ]; then
+  set -a
+  . "$SCRIPT_DIR/.env"
+  set +a
+fi
+
+working_dir=""
+
+# Extract --working-directory <path> from anywhere in the argument list
+new_args=()
+skip_next=false
+for arg in "$@"; do
+  if [ "$skip_next" = "true" ]; then
+    working_dir="$arg"
+    skip_next=false
+    continue
+  fi
+  if [ "$arg" = "--working-directory" ]; then
+    skip_next=true
+    continue
+  fi
+  new_args+=("$arg")
+done
+set -- "${new_args[@]}"
+
+# Fall back to the env var when the flag isn't provided
+if [ -z "$working_dir" ] && [ ! -z "$LOCAL_WORKING_PATH" ]; then
+  working_dir="$LOCAL_WORKING_PATH"
+fi
+
+if [ ! -z "$working_dir" ] && [ -d "$working_dir" ]; then
+  cd "$working_dir"
+  # Pull in the workspace's CLAUDE.md / AGENTS.md (multica agent instructions)
+  # by appending them to the system prompt. pi auto-discovers context files from
+  # CWD (the project), but the workspace's files aren't there after the cd.
+  # pi's --append-system-prompt auto-detects file paths and reads the contents,
+  # so we pass the path directly — no shell expansion needed.
+  if [ -f "$WORKSPACE_DIR/CLAUDE.md" ]; then
+    set -- --append-system-prompt "$WORKSPACE_DIR/CLAUDE.md" "$@"
+  fi
+  if [ -f "$WORKSPACE_DIR/AGENTS.md" ]; then
+    set -- --append-system-prompt "$WORKSPACE_DIR/AGENTS.md" "$@"
+  fi
+fi
+
+exec "${PI_BIN:-pi}" "$@"

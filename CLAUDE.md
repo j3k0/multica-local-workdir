@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-Three small bash wrappers and an opencode config snippet. No build system, no tests, no language runtime — changes are pure shell. Treat each wrapper as a single-purpose script and keep them self-contained.
+Four small bash wrappers and an opencode config snippet. No build system, no tests, no language runtime — changes are pure shell. Treat each wrapper as a single-purpose script and keep them self-contained.
 
-- `multica-daemon` — entry point. Sources `.env`, exports `MULTICA_CLAUDE_PATH` / `MULTICA_OPENCODE_PATH` pointing at the wrapper scripts in this directory, then `exec`s the real `multica daemon`. This is how the multica binary is told to use our wrappers instead of `claude` / `opencode` directly.
+- `multica-daemon` — entry point. Sources `.env`, exports `MULTICA_CLAUDE_PATH` / `MULTICA_OPENCODE_PATH` / `MULTICA_PI_PATH` pointing at the wrapper scripts in this directory, then `exec`s the real `multica daemon`. This is how the multica binary is told to use our wrappers instead of `claude` / `opencode` / `pi` directly.
 - `claude` — wrapper around the Claude Code CLI.
 - `opencode` — wrapper around the opencode CLI.
+- `pi` — wrapper around the pi CLI.
 - `opencode-config.json` — referenced by the `opencode` wrapper via `OPENCODE_CONFIG`; uses `{env:EXTRA_INSTRUCTIONS_PATH}` interpolation so opencode loads the workspace's `AGENTS.md` as an instructions file.
 - `claude-providers/<name>.sh` — sourced by the `claude` wrapper when `LWD_PROVIDER=<name>` is set. Each file exports `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / model defaults to redirect claude at a non-Anthropic backend (DeepSeek, Ollama, …). Files may honour `LWD_MODEL` as a convention to let callers switch models without editing the file. Missing provider names fail loud — silent fallthrough would burn real Anthropic credits on a typo. Provider files reference secrets like `$DEEPSEEK_API_KEY` from `.env` rather than embedding them. `ollama launch claude --model X` was verified empirically to do nothing more than set env vars (so it fits this pattern, no special-casing needed).
 
@@ -20,14 +21,15 @@ multica runs the agent CLI from a per-session **workspace directory** (e.g. `~/m
 2. **The workspace's instructions file (`CLAUDE.md` / `AGENTS.md`) lives in the workspace, not the project, so it stops loading once we `cd` away.** The wrappers capture `WORKSPACE_DIR="$(pwd)"` before the `cd` and re-inject the workspace's instructions:
    - `claude` prepends `--append-system-prompt "$(cat $WORKSPACE_DIR/CLAUDE.md)"` to argv. `--add-dir` was tried and does **not** auto-discover `CLAUDE.md` from added dirs (verified empirically) — that's why we use `--append-system-prompt`.
    - `opencode` exports `EXTRA_INSTRUCTIONS_PATH=$WORKSPACE_DIR/AGENTS.md` and `OPENCODE_CONFIG=$SCRIPT_DIR/opencode-config.json`, and the config's `instructions` array interpolates that env var.
+   - `pi` prepends `--append-system-prompt` for both `CLAUDE.md` and `AGENTS.md` from the workspace. pi auto-discovers context files from CWD (the project dir), but the workspace's files aren't in CWD after the `cd`.
 
-**opencode `--dir` overrides CWD.** The daemon passes `--dir <workspace>` to opencode; if the wrapper only does `cd "$project"` without rewriting `--dir`, opencode ignores the `cd` and runs from the workspace anyway (verified empirically — symptom: `pwd` in tool calls returns the workspace path, and only `AGENTS.md` is visible). The wrapper rewrites `--dir`'s value to the project path (or adds `--dir` if absent). `claude` does not have this flag — `--add-dir` whitelists access but doesn't relocate the project root — so the `claude` wrapper relies on `cd` alone.
+**opencode `--dir` overrides CWD.** The daemon passes `--dir <workspace>` to opencode; if the wrapper only does `cd "$project"` without rewriting `--dir`, opencode ignores the `cd` and runs from the workspace anyway (verified empirically — symptom: `pwd` in tool calls returns the workspace path, and only `AGENTS.md` is visible). The wrapper rewrites `--dir`'s value to the project path (or adds `--dir` if absent). `claude` and `pi` don't have this flag — `--add-dir` whitelists access but doesn't relocate the project root — so those wrappers rely on `cd` alone.
 
 If you change either re-injection mechanism, verify the other still works the same way — the two CLIs have asymmetric config systems.
 
 ## How the working directory is resolved
 
-Precedence in both wrappers:
+Precedence in all three wrappers:
 
 1. `--working-directory <path>` anywhere in argv. The wrapper strips the flag + value from argv before exec'ing the real binary.
 2. `LOCAL_WORKING_PATH` environment variable (set in the multica agent's environment).

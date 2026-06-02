@@ -12,5 +12,6 @@ fi
 
 export MULTICA_CLAUDE_PATH="$SCRIPT_DIR/claude"
 export MULTICA_OPENCODE_PATH="$SCRIPT_DIR/opencode"
+export MULTICA_PI_PATH="$SCRIPT_DIR/pi"
 
 exec "${MULTICA_BIN:-multica}" daemon "$@"

@@ -5,8 +5,9 @@
 
 model="${LWD_MODEL:-${LWD_OPENROUTER_MODEL:-qwen/qwen3.7-max}}"
 
-export ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1
+export ANTHROPIC_BASE_URL=https://openrouter.ai/api
 export ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY"
+export ANTHROPIC_API_KEY=""  # Must be explicitly empty to prevent auth conflicts
 export ANTHROPIC_MODEL="$model"
 export ANTHROPIC_DEFAULT_OPUS_MODEL="$model"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="$model"

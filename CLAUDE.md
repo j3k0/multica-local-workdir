@@ -58,3 +58,9 @@ There is no test suite. To validate a wrapper change, exercise the actual argv p
 ## Commit style
 
 Short imperative subject, no Claude/Co-Authored footers (per user global instructions). Recent history is the reference for tone.
+
+# Lessons
+
+- `lessons/multica-desktop-daemon-supervisor.md` — how the Multica Desktop app supervises/restarts its own daemon (profile/port/health/version logic, reverse-engineered from `app.asar`), and the `health-responder/` decoy that stops it.
+- `lessons/multica-agent-types-are-hardcoded.md` — multica's agent/provider types are a compiled-in enum (claude, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity); you can't add a new agent *type* with a wrapper alone.
+- `lessons/opencode-go-claude-provider.md` — the `opencode-go` claude-provider routes claude through OpenCode Go's open-weight models, which need the local `oc-go-cc` translating proxy (no native Anthropic endpoint).

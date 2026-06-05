@@ -1,3 +1,6 @@
 .env
+claude.log
 my-sync
 claude-providers/my-*.sh
+health-responder/responder.log
+health-responder/responder.pid

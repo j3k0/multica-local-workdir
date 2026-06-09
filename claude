@@ -33,8 +33,10 @@ unset _lwd_provider_override _lwd_model_override _lwd_allow_mcp_override
 # which is expected to export ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN /
 # model defaults to redirect claude at a non-Anthropic backend. Provider
 # files may honor LWD_MODEL to pick a specific model.
+# LWD_PROVIDER=anthropic is the native backend: load no provider env so claude
+# uses its built-in Anthropic defaults.
 # Fail loud on a missing file rather than silently falling back to Anthropic.
-if [ -n "$LWD_PROVIDER" ]; then
+if [ -n "$LWD_PROVIDER" ] && [ "$LWD_PROVIDER" != "anthropic" ]; then
   provider_file="$SCRIPT_DIR/claude-providers/$LWD_PROVIDER.sh"
   if [ ! -f "$provider_file" ]; then
     echo "claude wrapper: LWD_PROVIDER='$LWD_PROVIDER' not found at $provider_file" >&2

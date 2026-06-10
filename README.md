@@ -37,7 +37,31 @@ In each agent's multica configuration, set `concurrency: 1`. Two sessions of the
 
 Set `LWD_EFFORT=<level>` and the `claude` wrapper injects `--effort <level>` (unless the caller already passed `--effort`). Valid levels are `low`, `medium`, `high`, `xhigh`, `max`; an unknown value fails loud rather than letting claude reject the flag mid-session.
 
-Because env vars can be set **per agent** in multica, a per-agent `LWD_EFFORT` is effectively dynamic effort classification: give each agent the effort its job warrants — `max` for an orchestrator or code reviewer, `low` for a trivial-chore agent — without the wrapper inspecting the (streamed) prompt. Set it globally in `.env` as a default, or per-agent in multica; ambient values win over the `.env` default, and a provider file may pin its own effort (priority: ambient env > provider file > .env).
+Because env vars can be set **per agent** in multica, a per-agent `LWD_EFFORT` is effectively dynamic effort classification: give each agent the effort its job warrants — `max` for an orchestrator or code reviewer, `low` for a trivial-chore agent — without the wrapper inspecting the (streamed) prompt. Set it globally in `.env` as a default, or per-agent in multica; ambient values win over the `.env` default, and a provider file may pin its own effort (priority: ambient env > provider file > .env). For **per-task** effort, see below.
+
+## Per-task settings from the issue (claude)
+
+For effort (and a few other knobs) that vary **per task** rather than per agent, the `claude` wrapper reads a `# Task Settings` block from the issue's description. multica writes the task's `multica issue get <id>` command into the workspace `CLAUDE.md`, so the wrapper can pull the issue ID, fetch the description, and apply the block — all without reading the (streamed) prompt.
+
+Put this anywhere in the issue description:
+
+```
+# Task Settings
+
+effort: high
+model: claude-opus-4-8
+provider: deepseek
+path: /abs/path/to/project
+```
+
+Each key maps to the matching env knob (`effort`→`LWD_EFFORT`, `model`→`LWD_MODEL`, `provider`→`LWD_PROVIDER`, `path`→`LOCAL_WORKING_PATH`); include only the ones you want. All keys are optional, and `effort` alone is the common case.
+
+Task settings take the **highest priority** — above per-agent (custom args / ambient env) and global (`.env`). Notes:
+
+- Needs `jq` on `PATH`; without it, task settings are silently skipped.
+- Invalid values are ignored with a line in `claude.log` (never abort) — e.g. an effort outside `low|medium|high|xhigh|max`, an unknown provider, or a non-existent path. `model` only takes effect through a provider file, same as `LWD_MODEL`.
+- It runs a `multica issue get` on every launch (~0.3s). Opt out with `LWD_TASK_SETTINGS=0`.
+- `provider` and `path` let issue text source a provider script / relocate the working dir; fine for self-hosted with trusted issue authors, otherwise opt out.
 
 ## Allowing project MCP servers (claude)
 

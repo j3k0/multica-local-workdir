@@ -34,6 +34,8 @@ Precedence in all three wrappers:
 1. `--working-directory <path>` anywhere in argv. The wrapper strips the flag + value from argv before exec'ing the real binary.
 2. `LOCAL_WORKING_PATH` environment variable (set in the multica agent's environment).
 
+In the `claude` wrapper a `path:` line in the issue's `# Task Settings` block (see below) outranks both of these.
+
 The arg is scanned with a loop over all positions, not just `args[count-2]` — the daemon may put it before the prompt positional. If you re-introduce a tail-only check, the flag will silently be ignored when a prompt arg follows.
 
 The same loop in the `claude` wrapper also strips `--strict-mcp-config` when `LWD_ALLOW_MCP=1`. multica injects that flag to disable project/user MCP configs (sandboxing for its SaaS); the opt-in flips it off so self-hosted setups can use `.claude/settings.json` MCP servers. Default off — turning it on bypasses multica's intended sandboxing.
@@ -42,7 +44,30 @@ The same loop in the `claude` wrapper also strips `--strict-mcp-config` when `LW
 
 `LWD_EFFORT=<low|medium|high|xhigh|max>` makes the `claude` wrapper inject `--effort <level>` unless the caller already passed `--effort` (both `--effort x` and `--effort=x` forms are detected). The value is validated against the allowed set and fails loud on a typo — same philosophy as the loud failure on an unknown `LWD_PROVIDER`, so a bad value doesn't reach claude and abort the session mid-run. Priority is ambient env > provider file > .env, so the ambient override is captured before `.env` is sourced and re-applied after the provider file runs (a provider may pin an effort its backend tolerates) — identical handling to `LWD_FALLBACK_MODEL`.
 
-There is no in-wrapper *classifier* (the prompt arrives over stdin as stream-json, so the wrapper can't read it without consuming it). "Dynamic" classification is achieved through multica's per-agent env: set `LWD_EFFORT` per agent so each runs at the effort its role warrants. If you ever want true content-based classification, it belongs upstream (the orchestrator that sets the per-agent env), not in this wrapper.
+The wrapper does **not** read the prompt to classify effort (the prompt arrives over stdin as stream-json; reading it would consume it). Per-agent classification is just multica's per-agent env. Per-*task* classification is the `# Task Settings` block below.
+
+## Per-task settings (`# Task Settings`)
+
+The `claude` wrapper lets a single task override settings from its **issue description**, which is the only per-task signal available without reading the prompt. Mechanism:
+
+1. multica writes the task's `multica issue get <id>` command into the workspace `CLAUDE.md`. The wrapper greps the first UUID out of `$WORKSPACE_DIR/CLAUDE.md`.
+2. It runs `multica issue get <id> --output json | jq -r .description` (so `jq` is a soft dependency — absent `jq` just skips task settings).
+3. It parses a `# Task Settings` block from the description — `key: value` lines from the heading until the next blank line (after ≥1 key), heading, or code fence. Recognised keys map straight onto the existing env knobs:
+
+   | key        | env var              |
+   |------------|----------------------|
+   | `effort`   | `LWD_EFFORT`         |
+   | `model`    | `LWD_MODEL`          |
+   | `provider` | `LWD_PROVIDER`       |
+   | `path`     | `LOCAL_WORKING_PATH` |
+
+Task settings sit at the **top of every precedence chain**: task > per-agent (ambient env) > provider file > .env. `effort` is overlaid after the ambient re-apply; `provider`/`model` are overlaid before provider selection (so a task provider sources the right file and a task model reaches it); `path` is overlaid after the argv/env working-dir resolution. A `model:` only takes effect through a provider file, exactly like `LWD_MODEL` — the wrapper never injects `--model`.
+
+**Design rules baked in (don't regress these):**
+- **Fail-open, always.** The fetch/parse runs on *every* launch (including every `--resume` turn — JC accepted the ~0.3s cost rather than gate it). A missing `jq`, a changed `CLAUDE.md` format, a failed fetch, or a malformed block must **skip silently and log to `claude.log`** (`task-settings:` prefix) — never abort, or it breaks every agent turn. This is the opposite of the loud failure on an operator-owned `LWD_PROVIDER`, because the description is softer, user-controlled input.
+- **Validate task values, warn-and-ignore (never abort).** A bad `effort` (incl. `ultracode` — deliberately *not* a claude `--effort` level), an unknown `provider`, or a non-directory `path` is dropped with a log line. Because task effort is pre-validated, the loud `LWD_EFFORT` check later only ever fires on operator env/.env typos.
+- **Parse with process substitution, not a heredoc.** The awk block references `$0`; an unquoted heredoc would let the shell expand it. `done < <(... awk ...)` also keeps the `task_*` assignments in the current shell.
+- **Opt out with `LWD_TASK_SETTINGS=0`** (`off`/`false`/`no` too). On by default. The `provider`/`path` keys let issue text source a bash file / relocate the working dir — acceptable because this project is self-hosted with trusted issue authors, but the opt-out is the escape hatch.
 
 ## Concurrency constraint
 

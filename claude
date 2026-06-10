@@ -25,10 +25,102 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
   set +a
 fi
 
+# --- Per-task settings (highest priority) -----------------------------------
+# multica writes the task's `multica issue get <id>` command into the workspace
+# CLAUDE.md. We read the issue description and apply a `# Task Settings` block
+# from it, letting a single task pin its own effort/model/provider/path —
+# outranking per-agent (ambient env) and global (.env) values. This is the only
+# per-*task* signal available without reading the prompt (which streams over
+# stdin, so the wrapper can't inspect it without consuming it).
+#
+# Fail-open by design: any failure here skips task settings and is logged to
+# claude.log; it must never abort the launch, since this runs on every turn of
+# every agent and the description is softer, user-controlled input. Opt out with
+# LWD_TASK_SETTINGS=0.
+task_effort=""; task_model=""; task_provider=""; task_path=""
+_ts_log() {
+  printf '%s task-settings: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" \
+    >> "$SCRIPT_DIR/claude.log" 2>/dev/null || true
+}
+case "${LWD_TASK_SETTINGS:-1}" in
+  0|off|false|no) _ts_log "disabled via LWD_TASK_SETTINGS" ;;
+  *)
+    if ! command -v jq >/dev/null 2>&1; then
+      _ts_log "jq not found; skipping task settings"
+    elif [ -f "$WORKSPACE_DIR/CLAUDE.md" ]; then
+      _ts_issue="$(grep -oE 'multica issue get [0-9a-fA-F-]{36}' "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | head -1 | grep -oE '[0-9a-fA-F-]{36}' || true)"
+      if [ -z "$_ts_issue" ]; then
+        _ts_log "no issue id in $WORKSPACE_DIR/CLAUDE.md; skipping"
+      else
+        _ts_desc="$("${MULTICA_BIN:-multica}" issue get "$_ts_issue" --output json 2>/dev/null | jq -r '.description // empty' 2>/dev/null || true)"
+        if [ -z "$_ts_desc" ]; then
+          _ts_log "could not read description for $_ts_issue; skipping"
+        else
+          # Parse `key: value` lines inside a `# Task Settings` block. The block
+          # runs from the heading to the next blank line, heading, or code fence.
+          # Process substitution (not a heredoc) keeps the assignments in this
+          # shell and stops the shell from expanding the awk program's `$0`.
+          while IFS='=' read -r _k _v; do
+            case "$_k" in
+              effort)   task_effort="$_v" ;;
+              model)    task_model="$_v" ;;
+              provider) task_provider="$_v" ;;
+              path)     task_path="$_v" ;;
+            esac
+          done < <(printf '%s\n' "$_ts_desc" | awk '
+            BEGIN{blk=0; seen=0}
+            /^[[:space:]]*#+[[:space:]]*[Tt]ask[[:space:]]+[Ss]ettings[[:space:]]*$/ {blk=1; seen=0; next}
+            # A blank line ends the block only once a key has been read, so the
+            # blank between the heading and the keys (the usual markdown layout)
+            # does not close it early. A heading or code fence always ends it.
+            blk && /^[[:space:]]*$/   { if (seen) blk=0; next }
+            blk && /^[[:space:]]*#/   {blk=0}
+            blk && /^[[:space:]]*```/ {blk=0}
+            blk {
+              s=$0; sub(/\r$/,"",s)
+              if (match(s, /^[[:space:]]*[A-Za-z_]+[[:space:]]*:/)) {
+                k=s; sub(/[[:space:]]*:.*/,"",k); gsub(/[[:space:]]/,"",k)
+                v=s; sub(/^[^:]*:[[:space:]]*/,"",v); sub(/[[:space:]]+$/,"",v)
+                print tolower(k) "=" v
+                seen=1
+              }
+            }')
+          # Validate task-sourced values; warn-and-ignore (never abort) on bad
+          # input. ultracode is intentionally NOT an effort level — claude's
+          # --effort only accepts low/medium/high/xhigh/max — so it lands here.
+          if [ -n "$task_effort" ]; then
+            case "$task_effort" in
+              low|medium|high|xhigh|max) ;;
+              *) _ts_log "ignoring invalid effort '$task_effort'"; task_effort="" ;;
+            esac
+          fi
+          if [ -n "$task_provider" ] && [ "$task_provider" != "anthropic" ] \
+             && [ ! -f "$SCRIPT_DIR/claude-providers/$task_provider.sh" ]; then
+            _ts_log "ignoring unknown provider '$task_provider'"; task_provider=""
+          fi
+          if [ -n "$task_path" ] && [ ! -d "$task_path" ]; then
+            _ts_log "ignoring non-directory path '$task_path'"; task_path=""
+          fi
+          if [ -n "$task_effort$task_model$task_provider$task_path" ]; then
+            _ts_log "applied effort='$task_effort' model='$task_model' provider='$task_provider' path='$task_path'"
+          fi
+        fi
+      fi
+    fi
+    ;;
+esac
+unset _ts_issue _ts_desc _k _v
+
 [ -n "$_lwd_provider_override" ] && LWD_PROVIDER="$_lwd_provider_override"
 [ -n "$_lwd_model_override" ] && LWD_MODEL="$_lwd_model_override"
 [ -n "$_lwd_allow_mcp_override" ] && LWD_ALLOW_MCP="$_lwd_allow_mcp_override"
 unset _lwd_provider_override _lwd_model_override _lwd_allow_mcp_override
+
+# Task settings outrank per-agent (ambient) and global (.env) provider/model.
+# Applied after the ambient re-apply above and before provider selection below,
+# so a task-pinned provider sources the right file and a task model reaches it.
+[ -n "$task_provider" ] && LWD_PROVIDER="$task_provider"
+[ -n "$task_model" ] && LWD_MODEL="$task_model"
 
 # Provider selection: LWD_PROVIDER=<name> sources claude-providers/<name>.sh,
 # which is expected to export ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN /
@@ -57,6 +149,10 @@ unset _lwd_fallback_model_override
 # ambient override after the provider file has had its say.
 [ -n "$_lwd_effort_override" ] && LWD_EFFORT="$_lwd_effort_override"
 unset _lwd_effort_override
+
+# Task-pinned effort outranks ambient and provider. Already validated above, so
+# the loud check below only ever fires on operator-owned env/.env typos.
+[ -n "$task_effort" ] && LWD_EFFORT="$task_effort"
 
 # Validate LWD_EFFORT against the levels claude accepts. Fail loud on a typo
 # rather than letting claude reject the flag mid-session (same philosophy as
@@ -113,6 +209,10 @@ set -- "${new_args[@]}"
 if [ -z "$working_dir" ] && [ ! -z "$LOCAL_WORKING_PATH" ]; then
   working_dir="$LOCAL_WORKING_PATH"
 fi
+
+# A task-pinned path outranks both --working-directory and LOCAL_WORKING_PATH
+# (already checked to be a directory during task-settings parsing).
+[ -n "$task_path" ] && working_dir="$task_path"
 
 if [ ! -z "$working_dir" ] && [ -d "$working_dir" ]; then
   cd "$working_dir"

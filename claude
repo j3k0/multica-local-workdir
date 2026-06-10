@@ -174,6 +174,7 @@ new_args=()
 skip_next=false
 has_fallback_model=false
 has_effort=false
+has_model=false
 for arg in "$@"; do
   if [ "$skip_next" = "true" ]; then
     working_dir="$arg"
@@ -193,6 +194,11 @@ for arg in "$@"; do
   # Also matches the --effort=value form.
   if [ "$arg" = "--effort" ] || [ "${arg%%=*}" = "--effort" ]; then
     has_effort=true
+  fi
+  # Note a caller-provided --model so LWD_MODEL doesn't clobber it below.
+  # Also matches the --model=value form.
+  if [ "$arg" = "--model" ] || [ "${arg%%=*}" = "--model" ]; then
+    has_model=true
   fi
   # Drop multica's --strict-mcp-config when LWD_ALLOW_MCP=1 so the project's
   # own MCP servers (.claude/settings.json, user config) load. multica injects
@@ -238,6 +244,16 @@ fi
 # trivial chores) without the wrapper inspecting the streamed prompt.
 if [ -n "$LWD_EFFORT" ] && [ "$has_effort" = "false" ]; then
   set -- --effort "$LWD_EFFORT" "$@"
+fi
+
+# Inject --model on the native Anthropic backend when LWD_MODEL is set and the
+# caller didn't already pass --model. With a provider active, the provider file
+# already consumes LWD_MODEL (sets ANTHROPIC_MODEL / ANTHROPIC_DEFAULT_*_MODEL),
+# so injecting --model here would double-handle it — hence native-only. LWD_MODEL
+# is the task > ambient > .env resolved value by this point.
+if [ -n "$LWD_MODEL" ] && [ "$has_model" = "false" ] \
+   && { [ -z "$LWD_PROVIDER" ] || [ "$LWD_PROVIDER" = "anthropic" ]; }; then
+  set -- --model "$LWD_MODEL" "$@"
 fi
 
 exec "${CLAUDE_BIN:-claude}" "$@"

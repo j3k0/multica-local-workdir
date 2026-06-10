@@ -59,7 +59,8 @@ Each key maps to the matching env knob (`effort`→`LWD_EFFORT`, `model`→`LWD_
 Task settings take the **highest priority** — above per-agent (custom args / ambient env) and global (`.env`). Notes:
 
 - Needs `jq` on `PATH`; without it, task settings are silently skipped.
-- Invalid values are ignored with a line in `claude.log` (never abort) — e.g. an effort outside `low|medium|high|xhigh|max`, an unknown provider, or a non-existent path. `model` only takes effect through a provider file, same as `LWD_MODEL`.
+- Invalid values are ignored with a line in `claude.log` (never abort) — e.g. an effort outside `low|medium|high|xhigh|max`, an unknown provider, or a non-existent path.
+- `model` resolves per backend: on the native Anthropic backend the wrapper injects `--model` (unless the caller already passed one); with a provider active the provider file consumes `LWD_MODEL` as before. Either way a task `model:` works.
 - It runs a `multica issue get` on every launch (~0.3s). Opt out with `LWD_TASK_SETTINGS=0`.
 - `provider` and `path` let issue text source a provider script / relocate the working dir; fine for self-hosted with trusted issue authors, otherwise opt out.
 

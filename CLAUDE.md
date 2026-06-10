@@ -61,7 +61,9 @@ The `claude` wrapper lets a single task override settings from its **issue descr
    | `provider` | `LWD_PROVIDER`       |
    | `path`     | `LOCAL_WORKING_PATH` |
 
-Task settings sit at the **top of every precedence chain**: task > per-agent (ambient env) > provider file > .env. `effort` is overlaid after the ambient re-apply; `provider`/`model` are overlaid before provider selection (so a task provider sources the right file and a task model reaches it); `path` is overlaid after the argv/env working-dir resolution. A `model:` only takes effect through a provider file, exactly like `LWD_MODEL` — the wrapper never injects `--model`.
+Task settings sit at the **top of every precedence chain**: task > per-agent (ambient env) > provider file > .env. `effort` is overlaid after the ambient re-apply; `provider`/`model` are overlaid before provider selection (so a task provider sources the right file and a task model reaches it); `path` is overlaid after the argv/env working-dir resolution.
+
+`model` resolves in two ways depending on backend. With a **provider** active, the provider file consumes `LWD_MODEL` (sets `ANTHROPIC_MODEL` / `ANTHROPIC_DEFAULT_*_MODEL`) as before. On the **native Anthropic** backend (`LWD_PROVIDER` empty or `anthropic`), the wrapper injects `--model "$LWD_MODEL"` into argv — unless the caller already passed `--model`. It's native-only on purpose: injecting `--model` *and* letting a provider file set the model env would double-handle it. This applies to any source of `LWD_MODEL` (task, ambient, .env), not just task settings.
 
 **Design rules baked in (don't regress these):**
 - **Fail-open, always.** The fetch/parse runs on *every* launch (including every `--resume` turn — JC accepted the ~0.3s cost rather than gate it). A missing `jq`, a changed `CLAUDE.md` format, a failed fetch, or a malformed block must **skip silently and log to `claude.log`** (`task-settings:` prefix) — never abort, or it breaks every agent turn. This is the opposite of the loud failure on an operator-owned `LWD_PROVIDER`, because the description is softer, user-controlled input.

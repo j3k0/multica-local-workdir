@@ -37,7 +37,7 @@ fi
 # claude.log; it must never abort the launch, since this runs on every turn of
 # every agent and the description is softer, user-controlled input. Opt out with
 # LWD_TASK_SETTINGS=0.
-task_effort=""; task_model=""; task_provider=""; task_path=""
+task_effort=""; task_model=""; task_provider=""; task_path=""; task_block_seen=false
 _ts_log() {
   printf '%s task-settings: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" \
     >> "$SCRIPT_DIR/claude.log" 2>/dev/null || true
@@ -56,6 +56,11 @@ case "${LWD_TASK_SETTINGS:-1}" in
         if [ -z "$_ts_desc" ]; then
           _ts_log "could not read description for $_ts_issue; skipping"
         else
+          # Record whether the description carries the block at all (even if its
+          # values turn out invalid) so we can tell the agent to ignore it below.
+          if printf '%s\n' "$_ts_desc" | grep -qiE '^[[:space:]]*#+[[:space:]]*task[[:space:]]+settings[[:space:]]*$'; then
+            task_block_seen=true
+          fi
           # Parse `key: value` lines inside a `# Task Settings` block. The block
           # runs from the heading to the next blank line, heading, or code fence.
           # Process substitution (not a heredoc) keeps the assignments in this
@@ -222,12 +227,23 @@ fi
 
 if [ ! -z "$working_dir" ] && [ -d "$working_dir" ]; then
   cd "$working_dir"
-  # Pull in the workspace's CLAUDE.md (multica agent instructions) by
-  # appending it to the system prompt. --add-dir does NOT auto-discover
-  # CLAUDE.md from added dirs (verified empirically), so use this instead.
-  if [ -f "$WORKSPACE_DIR/CLAUDE.md" ]; then
-    set -- --append-system-prompt "$(cat "$WORKSPACE_DIR/CLAUDE.md")" "$@"
+  # Build the appended system prompt: the workspace's CLAUDE.md (multica agent
+  # instructions; --add-dir does NOT auto-discover it — verified empirically),
+  # plus, when the issue carries a `# Task Settings` block, a note telling the
+  # agent that block is wrapper config already applied and not part of the task.
+  # Kept as ONE --append-system-prompt (claude's flag is not reliably repeatable
+  # — a second one could clobber the first).
+  _sys_addon=""
+  [ -f "$WORKSPACE_DIR/CLAUDE.md" ] && _sys_addon="$(cat "$WORKSPACE_DIR/CLAUDE.md")"
+  if [ "$task_block_seen" = "true" ]; then
+    _ts_note="The issue description contains a \`# Task Settings\` block (key: value lines, possibly wrapped in an HTML comment). It is configuration for the multica-local-workdir claude wrapper and has already been applied to this session. Ignore it — it is not part of the task to act on."
+    if [ -n "$_sys_addon" ]; then
+      _sys_addon="$_sys_addon"$'\n\n'"$_ts_note"
+    else
+      _sys_addon="$_ts_note"
+    fi
   fi
+  [ -n "$_sys_addon" ] && set -- --append-system-prompt "$_sys_addon" "$@"
 fi
 
 # Force a fallback model when LWD_FALLBACK_MODEL is set and the caller didn't

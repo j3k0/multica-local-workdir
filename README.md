@@ -56,6 +56,20 @@ path: /abs/path/to/project
 
 Each key maps to the matching env knob (`effort`→`LWD_EFFORT`, `model`→`LWD_MODEL`, `provider`→`LWD_PROVIDER`, `path`→`LOCAL_WORKING_PATH`); include only the ones you want. All keys are optional, and `effort` alone is the common case.
 
+### Keeping it out of the agent's way
+
+The block is configuration, not instructions, so you don't want the agent acting on it. Two things keep it clear:
+
+1. **The wrapper tells the agent to ignore it.** When a `# Task Settings` block is present, the wrapper appends a note to the agent's system prompt saying the block is already-applied wrapper config and not part of the task.
+2. **You can hide it from the rendered issue** by wrapping it in an HTML comment — it still parses (keep the heading and keys on their own lines):
+
+   ```
+   <!--
+   # Task Settings
+   effort: high
+   -->
+   ```
+
 Task settings take the **highest priority** — above per-agent (custom args / ambient env) and global (`.env`). Notes:
 
 - Needs `jq` on `PATH`; without it, task settings are silently skipped.

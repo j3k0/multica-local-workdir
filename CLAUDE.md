@@ -38,6 +38,12 @@ The arg is scanned with a loop over all positions, not just `args[count-2]` — 
 
 The same loop in the `claude` wrapper also strips `--strict-mcp-config` when `LWD_ALLOW_MCP=1`. multica injects that flag to disable project/user MCP configs (sandboxing for its SaaS); the opt-in flips it off so self-hosted setups can use `.claude/settings.json` MCP servers. Default off — turning it on bypasses multica's intended sandboxing.
 
+## Effort level (`LWD_EFFORT`)
+
+`LWD_EFFORT=<low|medium|high|xhigh|max>` makes the `claude` wrapper inject `--effort <level>` unless the caller already passed `--effort` (both `--effort x` and `--effort=x` forms are detected). The value is validated against the allowed set and fails loud on a typo — same philosophy as the loud failure on an unknown `LWD_PROVIDER`, so a bad value doesn't reach claude and abort the session mid-run. Priority is ambient env > provider file > .env, so the ambient override is captured before `.env` is sourced and re-applied after the provider file runs (a provider may pin an effort its backend tolerates) — identical handling to `LWD_FALLBACK_MODEL`.
+
+There is no in-wrapper *classifier* (the prompt arrives over stdin as stream-json, so the wrapper can't read it without consuming it). "Dynamic" classification is achieved through multica's per-agent env: set `LWD_EFFORT` per agent so each runs at the effort its role warrants. If you ever want true content-based classification, it belongs upstream (the orchestrator that sets the per-agent env), not in this wrapper.
+
 ## Concurrency constraint
 
 Each agent in multica must be configured with `concurrency: 1`. Two sessions sharing the same project directory would collide on git state, lock files, and edits. There is no in-wrapper locking — the constraint is enforced by the operator's multica config.

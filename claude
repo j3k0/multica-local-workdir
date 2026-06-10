@@ -16,6 +16,7 @@ _lwd_provider_override="$LWD_PROVIDER"
 _lwd_model_override="$LWD_MODEL"
 _lwd_allow_mcp_override="$LWD_ALLOW_MCP"
 _lwd_fallback_model_override="$LWD_FALLBACK_MODEL"
+_lwd_effort_override="$LWD_EFFORT"
 
 # Source optional .env file (e.g. CLAUDE_BIN overrides)
 if [ -f "$SCRIPT_DIR/.env" ]; then
@@ -51,12 +52,32 @@ fi
 [ -n "$_lwd_fallback_model_override" ] && LWD_FALLBACK_MODEL="$_lwd_fallback_model_override"
 unset _lwd_fallback_model_override
 
+# Effort level priority is ambient > provider > .env, same as the fallback
+# model (a provider may pin an effort its backend tolerates). Re-apply the
+# ambient override after the provider file has had its say.
+[ -n "$_lwd_effort_override" ] && LWD_EFFORT="$_lwd_effort_override"
+unset _lwd_effort_override
+
+# Validate LWD_EFFORT against the levels claude accepts. Fail loud on a typo
+# rather than letting claude reject the flag mid-session (same philosophy as
+# the loud failure on an unknown LWD_PROVIDER).
+if [ -n "$LWD_EFFORT" ]; then
+  case "$LWD_EFFORT" in
+    low|medium|high|xhigh|max) ;;
+    *)
+      echo "claude wrapper: LWD_EFFORT='$LWD_EFFORT' invalid (expected: low, medium, high, xhigh, max)" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 working_dir=""
 
 # Extract --working-directory <path> from anywhere in the argument list
 new_args=()
 skip_next=false
 has_fallback_model=false
+has_effort=false
 for arg in "$@"; do
   if [ "$skip_next" = "true" ]; then
     working_dir="$arg"
@@ -71,6 +92,11 @@ for arg in "$@"; do
   # clobber it below. Also matches the --fallback-model=value form.
   if [ "$arg" = "--fallback-model" ] || [ "${arg%%=*}" = "--fallback-model" ]; then
     has_fallback_model=true
+  fi
+  # Note a caller-provided --effort so LWD_EFFORT doesn't clobber it below.
+  # Also matches the --effort=value form.
+  if [ "$arg" = "--effort" ] || [ "${arg%%=*}" = "--effort" ]; then
+    has_effort=true
   fi
   # Drop multica's --strict-mcp-config when LWD_ALLOW_MCP=1 so the project's
   # own MCP servers (.claude/settings.json, user config) load. multica injects
@@ -103,6 +129,15 @@ fi
 # reject some parameters (thinking, …) — claude retries on the fallback.
 if [ -n "$LWD_FALLBACK_MODEL" ] && [ "$has_fallback_model" = "false" ]; then
   set -- --fallback-model "$LWD_FALLBACK_MODEL" "$@"
+fi
+
+# Set the effort level when LWD_EFFORT is set and the caller didn't already
+# pass --effort. In multica, env vars can be set per-agent, so a per-agent
+# LWD_EFFORT is effectively dynamic effort classification: each agent runs at
+# the effort its job warrants (e.g. max for orchestration/review, low for
+# trivial chores) without the wrapper inspecting the streamed prompt.
+if [ -n "$LWD_EFFORT" ] && [ "$has_effort" = "false" ]; then
+  set -- --effort "$LWD_EFFORT" "$@"
 fi
 
 exec "${CLAUDE_BIN:-claude}" "$@"

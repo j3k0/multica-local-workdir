@@ -33,6 +33,12 @@ In each agent's multica configuration, set `concurrency: 1`. Two sessions of the
 
 ![Agent configuration in multica: LOCAL_WORKING_PATH set under Environment, Concurrency set to 1](docs/agent-config.png)
 
+## Setting the effort level (claude)
+
+Set `LWD_EFFORT=<level>` and the `claude` wrapper injects `--effort <level>` (unless the caller already passed `--effort`). Valid levels are `low`, `medium`, `high`, `xhigh`, `max`; an unknown value fails loud rather than letting claude reject the flag mid-session.
+
+Because env vars can be set **per agent** in multica, a per-agent `LWD_EFFORT` is effectively dynamic effort classification: give each agent the effort its job warrants — `max` for an orchestrator or code reviewer, `low` for a trivial-chore agent — without the wrapper inspecting the (streamed) prompt. Set it globally in `.env` as a default, or per-agent in multica; ambient values win over the `.env` default, and a provider file may pin its own effort (priority: ambient env > provider file > .env).
+
 ## Allowing project MCP servers (claude)
 
 multica injects `--strict-mcp-config` into the `claude` CLI, which makes claude ignore any MCP servers configured in the project (`.claude/settings.json`) or in the user's claude config. That's a sensible default for multica's hosted SaaS, but on a self-hosted setup the operator owns the project and usually wants those servers to load (see [multica#2532](https://github.com/multica-ai/multica/issues/2532)).

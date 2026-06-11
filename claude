@@ -72,12 +72,43 @@ case "${LWD_TASK_SETTINGS:-1}" in
           #   - the issue is assigned to a squad we lead (assignee_type=squad,
           #     squad leader_id == ours).
           # Any other case (a different agent, a squad we don't lead, a member,
-          # or unassigned) leaves Task Settings off for this agent. The double
-          # grep isolates the identity line from the other `ID:` lines in the
-          # file (e.g. a triggering-comment id). Fail-safe: if we can't resolve
-          # our id or the assignee, the gate stays closed (settings not applied)
-          # — same safe direction as the rest of this fail-open block.
-          _ts_agent="$(grep 'You are: ' "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | grep 'ID: ' | head -1 | cut -d'`' -f2 || true)"
+          # or unassigned) leaves Task Settings off for this agent. Fail-safe:
+          # if we can't resolve our id or the assignee, the gate stays closed
+          # (settings not applied) — same safe direction as the rest of this
+          # fail-open block.
+          #
+          # Primary: the "**You are: NAME** (ID: `<uuid>`)" line multica writes.
+          # "You are: " is the only line carrying it (the issue/comment ids
+          # elsewhere in the file do not), so select on that and pull the id out
+          # by uuid regex rather than a fixed backtick column — a delimiter tweak
+          # alone then can't break it.
+          _uuid_re='[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+          _ts_agent="$(grep 'You are: ' "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | grep -oE "$_uuid_re" | head -1 || true)"
+          if [ -z "$_ts_agent" ]; then
+            # Fallback (logged WARNING): the identity line is gone or reshaped.
+            # Scan every uuid in the file and ask multica which ones resolve to
+            # an agent — issue/comment ids do not, so they drop out. Apply only
+            # when exactly one agent id remains; 0 or >1 is ambiguous, so stay
+            # closed. Keeps us working if multica changes the line, while the
+            # WARNING makes the drift visible in claude.log.
+            _ts_n=0
+            for _id in $(grep -oE "$_uuid_re" "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | sort -u || true); do
+              if "${MULTICA_BIN:-multica}" agent get "$_id" --output json 2>/dev/null \
+                   | jq -e '.id // empty' >/dev/null 2>&1; then
+                _ts_agent="$_id"; _ts_n=$((_ts_n + 1))
+              fi
+            done
+            if [ "$_ts_n" = 1 ]; then
+              _ts_log "WARNING: 'You are:' identity line not found; fell back to the sole agent id ($_ts_agent) in CLAUDE.md — multica may have changed the line format"
+            else
+              _ts_agent=""
+              if [ "$_ts_n" = 0 ]; then
+                _ts_log "WARNING: 'You are:' identity line not found and no agent id in CLAUDE.md; not applying"
+              else
+                _ts_log "WARNING: 'You are:' identity line not found and $_ts_n agent ids in CLAUDE.md; ambiguous, not applying"
+              fi
+            fi
+          fi
           _ts_atype="$(printf '%s' "$_ts_json" | jq -r '.assignee_type // empty' 2>/dev/null || true)"
           _ts_aid="$(printf '%s' "$_ts_json" | jq -r '.assignee_id // empty' 2>/dev/null || true)"
           _ts_apply=false
@@ -150,7 +181,7 @@ case "${LWD_TASK_SETTINGS:-1}" in
     fi
     ;;
 esac
-unset _ts_issue _ts_json _ts_desc _ts_agent _ts_atype _ts_aid _ts_apply _ts_leader _k _v
+unset _ts_issue _ts_json _ts_desc _ts_agent _ts_atype _ts_aid _ts_apply _ts_leader _uuid_re _id _ts_n _k _v
 
 [ -n "$_lwd_provider_override" ] && LWD_PROVIDER="$_lwd_provider_override"
 [ -n "$_lwd_model_override" ] && LWD_MODEL="$_lwd_model_override"

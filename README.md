@@ -60,7 +60,7 @@ Each key maps to the matching env knob (`effort`→`LWD_EFFORT`, `model`→`LWD_
 
 The block is configuration, not instructions, so you don't want the agent acting on it. Two things keep it clear:
 
-1. **The wrapper tells the agent to ignore it.** When a `# Task Settings` block is present, the wrapper appends a note to the agent's system prompt saying the block is already-applied wrapper config and not part of the task.
+1. **The wrapper tells the agent to ignore it.** When a `# Task Settings` block is present, the wrapper appends a note to the agent's system prompt saying the block is wrapper config and not part of the task.
 2. **You can hide it from the rendered issue** by wrapping it in an HTML comment — it still parses (keep the heading and keys on their own lines):
 
    ```
@@ -72,6 +72,7 @@ The block is configuration, not instructions, so you don't want the agent acting
 
 Task settings take the **highest priority** — above per-agent (custom args / ambient env) and global (`.env`). Notes:
 
+- **Only the assigned agent gets them.** The block describes how the task's assigned work should run, so the wrapper applies it only when the running agent *is* the work's owner: the issue is assigned to this agent (`assignee_type: agent`), or to a squad this agent **leads**. Any other agent invoked on the same issue (a different agent, a squad member who isn't leader, a human/`member` assignee, or an unassigned issue) runs with its own config and ignores the block. The wrapper learns its own agent id from the `You are: … (ID: …)` line in the workspace `CLAUDE.md`; if it can't determine that or the assignee, it errs toward *not* applying.
 - Needs `jq` on `PATH`; without it, task settings are silently skipped.
 - Invalid values are ignored with a line in `claude.log` (never abort) — e.g. an effort outside `low|medium|high|xhigh|max`, an unknown provider, or a non-existent path.
 - `model` resolves per backend: on the native Anthropic backend the wrapper injects `--model` (unless the caller already passed one); with a provider active the provider file consumes `LWD_MODEL` as before. Either way a task `model:` works.

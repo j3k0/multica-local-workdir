@@ -52,69 +52,105 @@ case "${LWD_TASK_SETTINGS:-1}" in
       if [ -z "$_ts_issue" ]; then
         _ts_log "no issue id in $WORKSPACE_DIR/CLAUDE.md; skipping"
       else
-        _ts_desc="$("${MULTICA_BIN:-multica}" issue get "$_ts_issue" --output json 2>/dev/null | jq -r '.description // empty' 2>/dev/null || true)"
+        _ts_json="$("${MULTICA_BIN:-multica}" issue get "$_ts_issue" --output json 2>/dev/null || true)"
+        _ts_desc="$(printf '%s' "$_ts_json" | jq -r '.description // empty' 2>/dev/null || true)"
         if [ -z "$_ts_desc" ]; then
           _ts_log "could not read description for $_ts_issue; skipping"
         else
           # Record whether the description carries the block at all (even if its
-          # values turn out invalid) so we can tell the agent to ignore it below.
+          # values are invalid or we skip applying them below) so we can still
+          # tell the agent to ignore it.
           if printf '%s\n' "$_ts_desc" | grep -qiE '^[[:space:]]*#+[[:space:]]*task[[:space:]]+settings[[:space:]]*$'; then
             task_block_seen=true
           fi
-          # Parse `key: value` lines inside a `# Task Settings` block. The block
-          # runs from the heading to the next blank line, heading, or code fence.
-          # Process substitution (not a heredoc) keeps the assignments in this
-          # shell and stops the shell from expanding the awk program's `$0`.
-          while IFS='=' read -r _k _v; do
-            case "$_k" in
-              effort)   task_effort="$_v" ;;
-              model)    task_model="$_v" ;;
-              provider) task_provider="$_v" ;;
-              path)     task_path="$_v" ;;
-            esac
-          done < <(printf '%s\n' "$_ts_desc" | awk '
-            BEGIN{blk=0; seen=0}
-            /^[[:space:]]*#+[[:space:]]*[Tt]ask[[:space:]]+[Ss]ettings[[:space:]]*$/ {blk=1; seen=0; next}
-            # A blank line ends the block only once a key has been read, so the
-            # blank between the heading and the keys (the usual markdown layout)
-            # does not close it early. A heading or code fence always ends it.
-            blk && /^[[:space:]]*$/   { if (seen) blk=0; next }
-            blk && /^[[:space:]]*#/   {blk=0}
-            blk && /^[[:space:]]*```/ {blk=0}
-            blk {
-              s=$0; sub(/\r$/,"",s)
-              if (match(s, /^[[:space:]]*[A-Za-z_]+[[:space:]]*:/)) {
-                k=s; sub(/[[:space:]]*:.*/,"",k); gsub(/[[:space:]]/,"",k)
-                v=s; sub(/^[^:]*:[[:space:]]*/,"",v); sub(/[[:space:]]+$/,"",v)
-                print tolower(k) "=" v
-                seen=1
-              }
-            }')
-          # Validate task-sourced values; warn-and-ignore (never abort) on bad
-          # input. ultracode is intentionally NOT an effort level — claude's
-          # --effort only accepts low/medium/high/xhigh/max — so it lands here.
-          if [ -n "$task_effort" ]; then
-            case "$task_effort" in
-              low|medium|high|xhigh|max) ;;
-              *) _ts_log "ignoring invalid effort '$task_effort'"; task_effort="" ;;
-            esac
+          # Gate: Task Settings describe how the task's *assigned* work should be
+          # run, so honour them only when this very agent is the one the work
+          # belongs to. Resolve our own agent id from the
+          # "**You are: NAME** (ID: `…`)" line multica writes into the workspace
+          # CLAUDE.md, then apply only if:
+          #   - the issue is assigned to us (assignee_type=agent, id == ours), OR
+          #   - the issue is assigned to a squad we lead (assignee_type=squad,
+          #     squad leader_id == ours).
+          # Any other case (a different agent, a squad we don't lead, a member,
+          # or unassigned) leaves Task Settings off for this agent. The double
+          # grep isolates the identity line from the other `ID:` lines in the
+          # file (e.g. a triggering-comment id). Fail-safe: if we can't resolve
+          # our id or the assignee, the gate stays closed (settings not applied)
+          # — same safe direction as the rest of this fail-open block.
+          _ts_agent="$(grep 'You are: ' "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | grep 'ID: ' | head -1 | cut -d'`' -f2 || true)"
+          _ts_atype="$(printf '%s' "$_ts_json" | jq -r '.assignee_type // empty' 2>/dev/null || true)"
+          _ts_aid="$(printf '%s' "$_ts_json" | jq -r '.assignee_id // empty' 2>/dev/null || true)"
+          _ts_apply=false
+          if [ -z "$_ts_agent" ]; then
+            _ts_log "could not resolve running agent id from CLAUDE.md; not applying"
+          elif [ "$_ts_atype" = "agent" ] && [ -n "$_ts_aid" ] && [ "$_ts_aid" = "$_ts_agent" ]; then
+            _ts_apply=true
+          elif [ "$_ts_atype" = "squad" ] && [ -n "$_ts_aid" ]; then
+            _ts_leader="$("${MULTICA_BIN:-multica}" squad get "$_ts_aid" --output json 2>/dev/null | jq -r '.leader_id // empty' 2>/dev/null || true)"
+            if [ -n "$_ts_leader" ] && [ "$_ts_leader" = "$_ts_agent" ]; then
+              _ts_apply=true
+            else
+              _ts_log "squad $_ts_aid not led by this agent ($_ts_agent); not applying"
+            fi
+          else
+            _ts_log "issue assigned to ${_ts_atype:-nobody} (${_ts_aid:-none}), not this agent ($_ts_agent); not applying"
           fi
-          if [ -n "$task_provider" ] && [ "$task_provider" != "anthropic" ] \
-             && [ ! -f "$SCRIPT_DIR/claude-providers/$task_provider.sh" ]; then
-            _ts_log "ignoring unknown provider '$task_provider'"; task_provider=""
-          fi
-          if [ -n "$task_path" ] && [ ! -d "$task_path" ]; then
-            _ts_log "ignoring non-directory path '$task_path'"; task_path=""
-          fi
-          if [ -n "$task_effort$task_model$task_provider$task_path" ]; then
-            _ts_log "applied effort='$task_effort' model='$task_model' provider='$task_provider' path='$task_path'"
+          if [ "$_ts_apply" = "true" ]; then
+            # Parse `key: value` lines inside a `# Task Settings` block. The block
+            # runs from the heading to the next blank line, heading, or code fence.
+            # Process substitution (not a heredoc) keeps the assignments in this
+            # shell and stops the shell from expanding the awk program's `$0`.
+            while IFS='=' read -r _k _v; do
+              case "$_k" in
+                effort)   task_effort="$_v" ;;
+                model)    task_model="$_v" ;;
+                provider) task_provider="$_v" ;;
+                path)     task_path="$_v" ;;
+              esac
+            done < <(printf '%s\n' "$_ts_desc" | awk '
+              BEGIN{blk=0; seen=0}
+              /^[[:space:]]*#+[[:space:]]*[Tt]ask[[:space:]]+[Ss]ettings[[:space:]]*$/ {blk=1; seen=0; next}
+              # A blank line ends the block only once a key has been read, so the
+              # blank between the heading and the keys (the usual markdown layout)
+              # does not close it early. A heading or code fence always ends it.
+              blk && /^[[:space:]]*$/   { if (seen) blk=0; next }
+              blk && /^[[:space:]]*#/   {blk=0}
+              blk && /^[[:space:]]*```/ {blk=0}
+              blk {
+                s=$0; sub(/\r$/,"",s)
+                if (match(s, /^[[:space:]]*[A-Za-z_]+[[:space:]]*:/)) {
+                  k=s; sub(/[[:space:]]*:.*/,"",k); gsub(/[[:space:]]/,"",k)
+                  v=s; sub(/^[^:]*:[[:space:]]*/,"",v); sub(/[[:space:]]+$/,"",v)
+                  print tolower(k) "=" v
+                  seen=1
+                }
+              }')
+            # Validate task-sourced values; warn-and-ignore (never abort) on bad
+            # input. ultracode is intentionally NOT an effort level — claude's
+            # --effort only accepts low/medium/high/xhigh/max — so it lands here.
+            if [ -n "$task_effort" ]; then
+              case "$task_effort" in
+                low|medium|high|xhigh|max) ;;
+                *) _ts_log "ignoring invalid effort '$task_effort'"; task_effort="" ;;
+              esac
+            fi
+            if [ -n "$task_provider" ] && [ "$task_provider" != "anthropic" ] \
+               && [ ! -f "$SCRIPT_DIR/claude-providers/$task_provider.sh" ]; then
+              _ts_log "ignoring unknown provider '$task_provider'"; task_provider=""
+            fi
+            if [ -n "$task_path" ] && [ ! -d "$task_path" ]; then
+              _ts_log "ignoring non-directory path '$task_path'"; task_path=""
+            fi
+            if [ -n "$task_effort$task_model$task_provider$task_path" ]; then
+              _ts_log "applied effort='$task_effort' model='$task_model' provider='$task_provider' path='$task_path'"
+            fi
           fi
         fi
       fi
     fi
     ;;
 esac
-unset _ts_issue _ts_desc _k _v
+unset _ts_issue _ts_json _ts_desc _ts_agent _ts_atype _ts_aid _ts_apply _ts_leader _k _v
 
 [ -n "$_lwd_provider_override" ] && LWD_PROVIDER="$_lwd_provider_override"
 [ -n "$_lwd_model_override" ] && LWD_MODEL="$_lwd_model_override"
@@ -236,7 +272,7 @@ if [ ! -z "$working_dir" ] && [ -d "$working_dir" ]; then
   _sys_addon=""
   [ -f "$WORKSPACE_DIR/CLAUDE.md" ] && _sys_addon="$(cat "$WORKSPACE_DIR/CLAUDE.md")"
   if [ "$task_block_seen" = "true" ]; then
-    _ts_note="The issue description contains a \`# Task Settings\` block (key: value lines, possibly wrapped in an HTML comment). It is configuration for the multica-local-workdir claude wrapper and has already been applied to this session. Ignore it — it is not part of the task to act on."
+    _ts_note="The issue description contains a \`# Task Settings\` block (key: value lines, possibly wrapped in an HTML comment). It is configuration for the multica-local-workdir claude wrapper, not part of the task to act on. Ignore it."
     if [ -n "$_sys_addon" ]; then
       _sys_addon="$_sys_addon"$'\n\n'"$_ts_note"
     else

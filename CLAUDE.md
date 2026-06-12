@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-Four small bash wrappers and an opencode config snippet. No build system, no tests, no language runtime — changes are pure shell. Treat each wrapper as a single-purpose script and keep them self-contained.
+Four small bash wrappers, a provider-switcher helper, and an opencode config snippet. No build system, no tests, no language runtime — changes are pure shell. Treat each script as single-purpose and keep them self-contained.
 
 - `multica-daemon` — entry point. Sources `.env`, exports `MULTICA_CLAUDE_PATH` / `MULTICA_OPENCODE_PATH` / `MULTICA_PI_PATH` pointing at the wrapper scripts in this directory, then `exec`s the real `multica daemon`. This is how the multica binary is told to use our wrappers instead of `claude` / `opencode` / `pi` directly.
 - `claude` — wrapper around the Claude Code CLI.
 - `opencode` — wrapper around the opencode CLI.
 - `pi` — wrapper around the pi CLI.
 - `opencode-config.json` — referenced by the `opencode` wrapper via `OPENCODE_CONFIG`; uses `{env:EXTRA_INSTRUCTIONS_PATH}` interpolation so opencode loads the workspace's `AGENTS.md` as an instructions file.
+- `set-provider` — CLI helper that edits the active (uncommented) `LWD_PROVIDER` / `LWD_MODEL` assignments in `.env`, validating the provider name against `claude-providers/` before writing. Commented example lines are documentation — it must not touch them.
 - `claude-providers/<name>.sh` — sourced by the `claude` wrapper when `LWD_PROVIDER=<name>` is set. Each file exports `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / model defaults to redirect claude at a non-Anthropic backend (DeepSeek, Ollama, …). Files may honour `LWD_MODEL` as a convention to let callers switch models without editing the file. Missing provider names fail loud — silent fallthrough would burn real Anthropic credits on a typo. Provider files reference secrets like `$DEEPSEEK_API_KEY` from `.env` rather than embedding them. `ollama launch claude --model X` was verified empirically to do nothing more than set env vars (so it fits this pattern, no special-casing needed).
 
 ## The core trick (read before editing wrappers)
@@ -34,7 +35,7 @@ Precedence in all three wrappers:
 1. `--working-directory <path>` anywhere in argv. The wrapper strips the flag + value from argv before exec'ing the real binary.
 2. `LOCAL_WORKING_PATH` environment variable (set in the multica agent's environment).
 
-In the `claude` wrapper a `path:` line in the issue's `# Task Settings` block (see below) outranks both of these.
+In the `claude` wrapper a `path: …` settings label on the issue (see below) outranks both of these.
 
 The arg is scanned with a loop over all positions, not just `args[count-2]` — the daemon may put it before the prompt positional. If you re-introduce a tail-only check, the flag will silently be ignored when a prompt arg follows.
 
@@ -95,13 +96,15 @@ cp .env.example .env   # set MULTICA_SERVER_URL, optionally override *_BIN paths
 
 ## Testing changes
 
-There is no test suite. To validate a wrapper change, exercise the actual argv parsing with a throwaway `bash -c '...'` script that replays a real argv (see commit `0dd1145` for the pattern). Don't rely on `set -u` semantics — the scripts use `set -e` only, and empty-array expansions are intentional.
+There is no test suite. To validate a wrapper change, replay a real argv against an isolated copy: copy the wrapper into a temp dir (so it sources no real `.env` and logs to a throwaway `claude.log`), stub the binaries it calls with scripts that dump argv/env (`CLAUDE_BIN`, `MULTICA_BIN`, plus a fake workspace `CLAUDE.md` for the task-settings path), run it, and assert on the dump. Don't rely on `set -u` semantics — the scripts use `set -e` only, and empty-array expansions are intentional.
 
 ## Commit style
 
 Short imperative subject, no Claude/Co-Authored footers (per user global instructions). Recent history is the reference for tone.
 
 # Lessons
+
+The `lessons/` directory (like `health-responder/`) is **local and untracked** — it exists on the primary host only, so these files may be absent on a fresh clone. The one-line summaries below carry the key facts either way.
 
 - `lessons/multica-desktop-daemon-supervisor.md` — how the Multica Desktop app supervises/restarts its own daemon (profile/port/health/version logic, reverse-engineered from `app.asar`), and the `health-responder/` decoy that stops it.
 - `lessons/multica-agent-types-are-hardcoded.md` — multica's agent/provider types are a compiled-in enum (claude, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity); you can't add a new agent *type* with a wrapper alone.

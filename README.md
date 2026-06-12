@@ -77,10 +77,12 @@ Set `LWD_ALLOW_MCP=1` in `.env` (or per-agent in multica) and the `claude` wrapp
 
 Set `LWD_PROVIDER=<name>` and the `claude` wrapper sources `claude-providers/<name>.sh` before exec'ing the CLI. The provider file is just a bash file that exports `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, model defaults, etc. — claude itself does the rest.
 
-Two providers ship as examples:
+Four providers ship as examples:
 
 - **`deepseek`** — DeepSeek's Anthropic-compatible API. Requires `DEEPSEEK_API_KEY` in `.env`.
 - **`ollama`** — local Ollama daemon. Use any model the daemon can run (e.g. self-hosted `qwen3.6:35b`), or an Ollama Cloud model like `glm-5.1:cloud` (requires `ollama signin`). No separate key in either case.
+- **`openrouter`** — OpenRouter's Anthropic-compatible API. Requires `OPENROUTER_API_KEY` in `.env`; pick a model with `LWD_MODEL` (defaults to `qwen/qwen3.7-max`).
+- **`opencode-go`** — OpenCode Go's open-weight models (GLM, Kimi, DeepSeek, Qwen, …) via the local `oc-go-cc` translating proxy, which must already be running (OpenCode Go has no Anthropic-compatible endpoint; the subscription key lives in the proxy's environment). Model routing is the proxy's job, so `LWD_MODEL` is intentionally unused — see the header of `claude-providers/opencode-go.sh`.
 
 Add your own by dropping a `claude-providers/<name>.sh` file alongside them. Provider files may honour `LWD_MODEL` to let you switch models without editing the file. Set `LWD_PROVIDER` and `LWD_MODEL` in `.env` as project defaults, or per-agent in multica; values already in the environment (e.g. set per-agent in multica) take precedence over the global default.
 

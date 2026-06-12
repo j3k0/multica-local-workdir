@@ -27,17 +27,22 @@ fi
 
 # --- Per-task settings (highest priority) -----------------------------------
 # multica writes the task's `multica issue get <id>` command into the workspace
-# CLAUDE.md. We read the issue description and apply a `# Task Settings` block
-# from it, letting a single task pin its own effort/model/provider/path —
-# outranking per-agent (ambient env) and global (.env) values. This is the only
-# per-*task* signal available without reading the prompt (which streams over
-# stdin, so the wrapper can't inspect it without consuming it).
+# CLAUDE.md. We read the issue and apply settings from its *labels*: names of
+# the form `key: value` with keys effort/model/provider/path let a single task
+# pin its own settings, outranking per-agent (ambient env) and global (.env)
+# values. Labels are the per-task channel because they're structured data on
+# the issue itself — no free-text parsing of the user-authored description.
+# (Settings used to live in a `# Task Settings` description block; that block
+# is no longer parsed, but its presence is still detected so the agent can be
+# told to ignore it.) The prompt itself can't carry settings: it streams over
+# stdin, so the wrapper can't inspect it without consuming it.
 #
 # Fail-open by design: any failure here skips task settings and is logged to
 # claude.log; it must never abort the launch, since this runs on every turn of
-# every agent and the description is softer, user-controlled input. Opt out with
+# every agent and labels are softer, user-controlled input. Opt out with
 # LWD_TASK_SETTINGS=0.
-task_effort=""; task_model=""; task_provider=""; task_path=""; task_block_seen=false
+task_effort=""; task_model=""; task_provider=""; task_path=""
+task_block_seen=false; task_labels_seen=false
 _ts_log() {
   printf '%s task-settings: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" \
     >> "$SCRIPT_DIR/claude.log" 2>/dev/null || true
@@ -53,21 +58,45 @@ case "${LWD_TASK_SETTINGS:-1}" in
         _ts_log "no issue id in $WORKSPACE_DIR/CLAUDE.md; skipping"
       else
         _ts_json="$("${MULTICA_BIN:-multica}" issue get "$_ts_issue" --output json 2>/dev/null || true)"
-        _ts_desc="$(printf '%s' "$_ts_json" | jq -r '.description // empty' 2>/dev/null || true)"
-        if [ -z "$_ts_desc" ]; then
-          _ts_log "could not read description for $_ts_issue; skipping"
+        if ! printf '%s' "$_ts_json" | jq -e '.id // empty' >/dev/null 2>&1; then
+          _ts_log "could not read issue $_ts_issue; skipping"
         else
-          # Record whether the description carries the block at all (even if its
-          # values are invalid or we skip applying them below) so we can still
-          # tell the agent to ignore it.
-          if printf '%s\n' "$_ts_desc" | grep -qiE '^[[:space:]]*#+[[:space:]]*task[[:space:]]+settings[[:space:]]*$'; then
+          # Legacy: record whether the description still carries a
+          # `# Task Settings` block (no longer parsed) so we can still tell
+          # the agent to ignore it.
+          if printf '%s' "$_ts_json" | jq -r '.description // empty' 2>/dev/null \
+               | grep -qiE '^[[:space:]]*#+[[:space:]]*task[[:space:]]+settings[[:space:]]*$'; then
             task_block_seen=true
           fi
-          # Gate: Task Settings describe how the task's *assigned* work should be
-          # run, so honour them only when this very agent is the one the work
-          # belongs to. Resolve our own agent id from the
-          # "**You are: NAME** (ID: `…`)" line multica writes into the workspace
-          # CLAUDE.md, then apply only if:
+          # Collect settings from labels named `key: value`. Split on the FIRST
+          # colon (a model value like ollama's `qwen3:32b` keeps its colon),
+          # lowercase/strip-spaces the key, trim the value, and drop one pair of
+          # surrounding double quotes (forgiving a pasted `path: "/x y"`).
+          # Unrecognised keys are other people's labels — ignored silently.
+          # Collected before the assignee gate (and `task_labels_seen` tracked
+          # independently of it) so a non-assignee agent can still be told the
+          # labels aren't task content. Process substitution (not a pipeline)
+          # keeps the assignments in this shell.
+          _ts_lbl_effort=""; _ts_lbl_model=""; _ts_lbl_provider=""; _ts_lbl_path=""
+          while IFS= read -r _lbl; do
+            case "$_lbl" in *:*) ;; *) continue ;; esac
+            _k="$(printf '%s' "${_lbl%%:*}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+            _v="${_lbl#*:}"
+            _v="${_v#"${_v%%[![:space:]]*}"}"; _v="${_v%"${_v##*[![:space:]]}"}"
+            case "$_v" in \"*\") _v="${_v#\"}"; _v="${_v%\"}" ;; esac
+            case "$_k" in
+              effort)   _ts_lbl_effort="$_v";   task_labels_seen=true ;;
+              model)    _ts_lbl_model="$_v";    task_labels_seen=true ;;
+              provider) _ts_lbl_provider="$_v"; task_labels_seen=true ;;
+              path)     _ts_lbl_path="$_v";     task_labels_seen=true ;;
+            esac
+          done < <(printf '%s' "$_ts_json" | jq -r '.labels[]?.name // empty' 2>/dev/null || true)
+          # Gate (runs only when settings labels are present — otherwise there
+          # is nothing to apply): Task Settings describe how the task's
+          # *assigned* work should be run, so honour them only when this very
+          # agent is the one the work belongs to. Resolve our own agent id from
+          # the "**You are: NAME** (ID: `…`)" line multica writes into the
+          # workspace CLAUDE.md, then apply only if:
           #   - the issue is assigned to us (assignee_type=agent, id == ours), OR
           #   - the issue is assigned to a squad we lead (assignee_type=squad,
           #     squad leader_id == ours).
@@ -82,98 +111,73 @@ case "${LWD_TASK_SETTINGS:-1}" in
           # elsewhere in the file do not), so select on that and pull the id out
           # by uuid regex rather than a fixed backtick column — a delimiter tweak
           # alone then can't break it.
-          _uuid_re='[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
-          _ts_agent="$(grep 'You are: ' "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | grep -oE "$_uuid_re" | head -1 || true)"
-          if [ -z "$_ts_agent" ]; then
-            # Fallback (logged WARNING): the identity line is gone or reshaped.
-            # Scan every uuid in the file and ask multica which ones resolve to
-            # an agent — issue/comment ids do not, so they drop out. Apply only
-            # when exactly one agent id remains; 0 or >1 is ambiguous, so stay
-            # closed. Keeps us working if multica changes the line, while the
-            # WARNING makes the drift visible in claude.log.
-            _ts_n=0
-            for _id in $(grep -oE "$_uuid_re" "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | sort -u || true); do
-              if "${MULTICA_BIN:-multica}" agent get "$_id" --output json 2>/dev/null \
-                   | jq -e '.id // empty' >/dev/null 2>&1; then
-                _ts_agent="$_id"; _ts_n=$((_ts_n + 1))
-              fi
-            done
-            if [ "$_ts_n" = 1 ]; then
-              _ts_log "WARNING: 'You are:' identity line not found; fell back to the sole agent id ($_ts_agent) in CLAUDE.md — multica may have changed the line format"
-            else
-              _ts_agent=""
-              if [ "$_ts_n" = 0 ]; then
-                _ts_log "WARNING: 'You are:' identity line not found and no agent id in CLAUDE.md; not applying"
+          if [ "$task_labels_seen" = "true" ]; then
+            _uuid_re='[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+            _ts_agent="$(grep 'You are: ' "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | grep -oE "$_uuid_re" | head -1 || true)"
+            if [ -z "$_ts_agent" ]; then
+              # Fallback (logged WARNING): the identity line is gone or reshaped.
+              # Scan every uuid in the file and ask multica which ones resolve to
+              # an agent — issue/comment ids do not, so they drop out. Apply only
+              # when exactly one agent id remains; 0 or >1 is ambiguous, so stay
+              # closed. Keeps us working if multica changes the line, while the
+              # WARNING makes the drift visible in claude.log.
+              _ts_n=0
+              for _id in $(grep -oE "$_uuid_re" "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | sort -u || true); do
+                if "${MULTICA_BIN:-multica}" agent get "$_id" --output json 2>/dev/null \
+                     | jq -e '.id // empty' >/dev/null 2>&1; then
+                  _ts_agent="$_id"; _ts_n=$((_ts_n + 1))
+                fi
+              done
+              if [ "$_ts_n" = 1 ]; then
+                _ts_log "WARNING: 'You are:' identity line not found; fell back to the sole agent id ($_ts_agent) in CLAUDE.md — multica may have changed the line format"
               else
-                _ts_log "WARNING: 'You are:' identity line not found and $_ts_n agent ids in CLAUDE.md; ambiguous, not applying"
+                _ts_agent=""
+                if [ "$_ts_n" = 0 ]; then
+                  _ts_log "WARNING: 'You are:' identity line not found and no agent id in CLAUDE.md; not applying"
+                else
+                  _ts_log "WARNING: 'You are:' identity line not found and $_ts_n agent ids in CLAUDE.md; ambiguous, not applying"
+                fi
               fi
             fi
-          fi
-          _ts_atype="$(printf '%s' "$_ts_json" | jq -r '.assignee_type // empty' 2>/dev/null || true)"
-          _ts_aid="$(printf '%s' "$_ts_json" | jq -r '.assignee_id // empty' 2>/dev/null || true)"
-          _ts_apply=false
-          if [ -z "$_ts_agent" ]; then
-            _ts_log "could not resolve running agent id from CLAUDE.md; not applying"
-          elif [ "$_ts_atype" = "agent" ] && [ -n "$_ts_aid" ] && [ "$_ts_aid" = "$_ts_agent" ]; then
-            _ts_apply=true
-          elif [ "$_ts_atype" = "squad" ] && [ -n "$_ts_aid" ]; then
-            _ts_leader="$("${MULTICA_BIN:-multica}" squad get "$_ts_aid" --output json 2>/dev/null | jq -r '.leader_id // empty' 2>/dev/null || true)"
-            if [ -n "$_ts_leader" ] && [ "$_ts_leader" = "$_ts_agent" ]; then
+            _ts_atype="$(printf '%s' "$_ts_json" | jq -r '.assignee_type // empty' 2>/dev/null || true)"
+            _ts_aid="$(printf '%s' "$_ts_json" | jq -r '.assignee_id // empty' 2>/dev/null || true)"
+            _ts_apply=false
+            if [ -z "$_ts_agent" ]; then
+              _ts_log "could not resolve running agent id from CLAUDE.md; not applying"
+            elif [ "$_ts_atype" = "agent" ] && [ -n "$_ts_aid" ] && [ "$_ts_aid" = "$_ts_agent" ]; then
               _ts_apply=true
+            elif [ "$_ts_atype" = "squad" ] && [ -n "$_ts_aid" ]; then
+              _ts_leader="$("${MULTICA_BIN:-multica}" squad get "$_ts_aid" --output json 2>/dev/null | jq -r '.leader_id // empty' 2>/dev/null || true)"
+              if [ -n "$_ts_leader" ] && [ "$_ts_leader" = "$_ts_agent" ]; then
+                _ts_apply=true
+              else
+                _ts_log "squad $_ts_aid not led by this agent ($_ts_agent); not applying"
+              fi
             else
-              _ts_log "squad $_ts_aid not led by this agent ($_ts_agent); not applying"
+              _ts_log "issue assigned to ${_ts_atype:-nobody} (${_ts_aid:-none}), not this agent ($_ts_agent); not applying"
             fi
-          else
-            _ts_log "issue assigned to ${_ts_atype:-nobody} (${_ts_aid:-none}), not this agent ($_ts_agent); not applying"
-          fi
-          if [ "$_ts_apply" = "true" ]; then
-            # Parse `key: value` lines inside a `# Task Settings` block. The block
-            # runs from the heading to the next blank line, heading, or code fence.
-            # Process substitution (not a heredoc) keeps the assignments in this
-            # shell and stops the shell from expanding the awk program's `$0`.
-            while IFS='=' read -r _k _v; do
-              case "$_k" in
-                effort)   task_effort="$_v" ;;
-                model)    task_model="$_v" ;;
-                provider) task_provider="$_v" ;;
-                path)     task_path="$_v" ;;
-              esac
-            done < <(printf '%s\n' "$_ts_desc" | awk '
-              BEGIN{blk=0; seen=0}
-              /^[[:space:]]*#+[[:space:]]*[Tt]ask[[:space:]]+[Ss]ettings[[:space:]]*$/ {blk=1; seen=0; next}
-              # A blank line ends the block only once a key has been read, so the
-              # blank between the heading and the keys (the usual markdown layout)
-              # does not close it early. A heading or code fence always ends it.
-              blk && /^[[:space:]]*$/   { if (seen) blk=0; next }
-              blk && /^[[:space:]]*#/   {blk=0}
-              blk && /^[[:space:]]*```/ {blk=0}
-              blk {
-                s=$0; sub(/\r$/,"",s)
-                if (match(s, /^[[:space:]]*[A-Za-z_]+[[:space:]]*:/)) {
-                  k=s; sub(/[[:space:]]*:.*/,"",k); gsub(/[[:space:]]/,"",k)
-                  v=s; sub(/^[^:]*:[[:space:]]*/,"",v); sub(/[[:space:]]+$/,"",v)
-                  print tolower(k) "=" v
-                  seen=1
-                }
-              }')
-            # Validate task-sourced values; warn-and-ignore (never abort) on bad
-            # input. ultracode is intentionally NOT an effort level — claude's
-            # --effort only accepts low/medium/high/xhigh/max — so it lands here.
-            if [ -n "$task_effort" ]; then
-              case "$task_effort" in
-                low|medium|high|xhigh|max) ;;
-                *) _ts_log "ignoring invalid effort '$task_effort'"; task_effort="" ;;
-              esac
-            fi
-            if [ -n "$task_provider" ] && [ "$task_provider" != "anthropic" ] \
-               && [ ! -f "$SCRIPT_DIR/claude-providers/$task_provider.sh" ]; then
-              _ts_log "ignoring unknown provider '$task_provider'"; task_provider=""
-            fi
-            if [ -n "$task_path" ] && [ ! -d "$task_path" ]; then
-              _ts_log "ignoring non-directory path '$task_path'"; task_path=""
-            fi
-            if [ -n "$task_effort$task_model$task_provider$task_path" ]; then
-              _ts_log "applied effort='$task_effort' model='$task_model' provider='$task_provider' path='$task_path'"
+            if [ "$_ts_apply" = "true" ]; then
+              task_effort="$_ts_lbl_effort"; task_model="$_ts_lbl_model"
+              task_provider="$_ts_lbl_provider"; task_path="$_ts_lbl_path"
+              # Validate task-sourced values; warn-and-ignore (never abort) on bad
+              # input. ultracode is intentionally NOT an effort level — claude's
+              # --effort only accepts low/medium/high/xhigh/max — so it lands here.
+              if [ -n "$task_effort" ]; then
+                case "$task_effort" in
+                  low|medium|high|xhigh|max) ;;
+                  *) _ts_log "ignoring invalid effort '$task_effort'"; task_effort="" ;;
+                esac
+              fi
+              if [ -n "$task_provider" ] && [ "$task_provider" != "anthropic" ] \
+                 && [ ! -f "$SCRIPT_DIR/claude-providers/$task_provider.sh" ]; then
+                _ts_log "ignoring unknown provider '$task_provider'"; task_provider=""
+              fi
+              if [ -n "$task_path" ] && [ ! -d "$task_path" ]; then
+                _ts_log "ignoring non-directory path '$task_path'"; task_path=""
+              fi
+              if [ -n "$task_effort$task_model$task_provider$task_path" ]; then
+                _ts_log "applied effort='$task_effort' model='$task_model' provider='$task_provider' path='$task_path'"
+              fi
             fi
           fi
         fi
@@ -181,7 +185,7 @@ case "${LWD_TASK_SETTINGS:-1}" in
     fi
     ;;
 esac
-unset _ts_issue _ts_json _ts_desc _ts_agent _ts_atype _ts_aid _ts_apply _ts_leader _uuid_re _id _ts_n _k _v
+unset _ts_issue _ts_json _ts_agent _ts_atype _ts_aid _ts_apply _ts_leader _uuid_re _id _ts_n _k _v _lbl _ts_lbl_effort _ts_lbl_model _ts_lbl_provider _ts_lbl_path
 
 [ -n "$_lwd_provider_override" ] && LWD_PROVIDER="$_lwd_provider_override"
 [ -n "$_lwd_model_override" ] && LWD_MODEL="$_lwd_model_override"
@@ -296,14 +300,25 @@ if [ ! -z "$working_dir" ] && [ -d "$working_dir" ]; then
   cd "$working_dir"
   # Build the appended system prompt: the workspace's CLAUDE.md (multica agent
   # instructions; --add-dir does NOT auto-discover it — verified empirically),
-  # plus, when the issue carries a `# Task Settings` block, a note telling the
-  # agent that block is wrapper config already applied and not part of the task.
-  # Kept as ONE --append-system-prompt (claude's flag is not reliably repeatable
-  # — a second one could clobber the first).
+  # plus, when the issue carries settings labels or a legacy `# Task Settings`
+  # block, a note telling the agent those are wrapper config and not part of
+  # the task. Kept as ONE --append-system-prompt (claude's flag is not reliably
+  # repeatable — a second one could clobber the first).
   _sys_addon=""
   [ -f "$WORKSPACE_DIR/CLAUDE.md" ] && _sys_addon="$(cat "$WORKSPACE_DIR/CLAUDE.md")"
+  _ts_note=""
+  if [ "$task_labels_seen" = "true" ]; then
+    _ts_note="The issue carries labels of the form \`key: value\` (effort, model, provider, path). They are configuration for the multica-local-workdir claude wrapper, not part of the task to act on. Ignore them."
+  fi
   if [ "$task_block_seen" = "true" ]; then
-    _ts_note="The issue description contains a \`# Task Settings\` block (key: value lines, possibly wrapped in an HTML comment). It is configuration for the multica-local-workdir claude wrapper, not part of the task to act on. Ignore it."
+    _ts_blk_note="The issue description contains a \`# Task Settings\` block (key: value lines, possibly wrapped in an HTML comment). It is configuration for the multica-local-workdir claude wrapper (now superseded by settings labels), not part of the task to act on. Ignore it."
+    if [ -n "$_ts_note" ]; then
+      _ts_note="$_ts_note"$'\n'"$_ts_blk_note"
+    else
+      _ts_note="$_ts_blk_note"
+    fi
+  fi
+  if [ -n "$_ts_note" ]; then
     if [ -n "$_sys_addon" ]; then
       _sys_addon="$_sys_addon"$'\n\n'"$_ts_note"
     else

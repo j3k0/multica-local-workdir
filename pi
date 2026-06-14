@@ -14,12 +14,31 @@ _log_pi() {
   printf '\n' >> "$_log_dir/pi.log" 2>/dev/null || true
 }
 
-# Source optional .env file (e.g. PI_BIN overrides)
+# Preserve a caller-provided LWD_PI_VARIANT across .env sourcing — .env holds
+# the default variant, a value already in the environment (set per-agent in
+# multica) wins. Same idiom as the claude wrapper's LWD_* overrides.
+_lwd_pi_variant_override="$LWD_PI_VARIANT"
+
+# Source optional .env file (e.g. OMP_BIN / PI_BIN / LWD_PI_VARIANT)
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -a
   . "$SCRIPT_DIR/.env"
   set +a
 fi
+
+# Re-apply the ambient variant (per-agent) over the .env default.
+[ -n "$_lwd_pi_variant_override" ] && LWD_PI_VARIANT="$_lwd_pi_variant_override"
+
+# Select the pi binary from LWD_PI_VARIANT (default: pi = vanilla pi).
+# omp → OMP_BIN (oh-my-pi), pi → PI_BIN. The bin paths live in .env so the
+# install locations are declared once; agents only carry the lightweight variant
+# knob (reinstalling omp elsewhere → touch .env, not every agent). Unknown
+# variant fails loud, matching LWD_PROVIDER's loud failure on an operator typo.
+case "${LWD_PI_VARIANT:-pi}" in
+  omp) PI_BIN="${OMP_BIN:-omp}" ;;
+  pi)  PI_BIN="${PI_BIN:-pi}" ;;
+  *)   echo "pi wrapper: LWD_PI_VARIANT='$LWD_PI_VARIANT' invalid (expected: pi, omp)" >&2; exit 1 ;;
+esac
 
 _log_pi "$@"
 

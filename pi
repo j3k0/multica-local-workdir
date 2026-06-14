@@ -4,12 +4,14 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(pwd)"
 
-# Log each invocation to pi.log in this directory.
+# Log each invocation to ${LOG_DIR:-$SCRIPT_DIR/logs}/pi.log.
 # Best-effort: never let logging failures abort the wrapper.
+_log_dir="${LOG_DIR:-$SCRIPT_DIR/logs}"
+mkdir -p "$_log_dir" 2>/dev/null || true
 _log_pi() {
-  printf '%s pid=%s cwd=%s bin=%s args:' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$$" "$WORKSPACE_DIR" "${PI_BIN:-pi}" >> "$SCRIPT_DIR/pi.log" 2>/dev/null || true
-  printf ' %q' "$@" >> "$SCRIPT_DIR/pi.log" 2>/dev/null || true
-  printf '\n' >> "$SCRIPT_DIR/pi.log" 2>/dev/null || true
+  printf '%s pid=%s cwd=%s bin=%s args:' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$$" "$WORKSPACE_DIR" "${PI_BIN:-pi}" >> "$_log_dir/pi.log" 2>/dev/null || true
+  printf ' %q' "$@" >> "$_log_dir/pi.log" 2>/dev/null || true
+  printf '\n' >> "$_log_dir/pi.log" 2>/dev/null || true
 }
 
 # Source optional .env file (e.g. PI_BIN overrides)

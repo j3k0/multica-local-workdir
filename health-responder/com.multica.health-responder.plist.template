@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template — do not load this file directly.
+  install-launchd.sh substitutes __PYTHON__ / __RESPONDER__ / __DIR__ and
+  installs the result at ~/Library/LaunchAgents/com.multica.health-responder.plist
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.multica.health-responder</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>__PYTHON__</string>
+		<string>__RESPONDER__</string>
+	</array>
+
+	<!-- Start at login and keep it alive across crashes. -->
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+
+	<key>WorkingDirectory</key>
+	<string>__DIR__</string>
+	<key>StandardOutPath</key>
+	<string>__DIR__/responder.log</string>
+	<key>StandardErrorPath</key>
+	<string>__DIR__/responder.log</string>
+
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>

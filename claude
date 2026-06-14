@@ -4,11 +4,13 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(pwd)"
 
-# Log each invocation (raw argv, before any rewriting) to claude.log in this
-# directory. Best-effort: never let logging failures abort the wrapper.
-printf '%s pid=%s cwd=%s args:' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$$" "$WORKSPACE_DIR" >> "$SCRIPT_DIR/claude.log" 2>/dev/null || true
-printf ' %q' "$@" >> "$SCRIPT_DIR/claude.log" 2>/dev/null || true
-printf '\n' >> "$SCRIPT_DIR/claude.log" 2>/dev/null || true
+# Log each invocation to ${LOG_DIR:-$SCRIPT_DIR/logs}/claude.log.
+# Best-effort: never let logging failures abort the wrapper.
+_log_dir="${LOG_DIR:-$SCRIPT_DIR/logs}"
+mkdir -p "$_log_dir" 2>/dev/null || true
+printf '%s pid=%s cwd=%s args:' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$$" "$WORKSPACE_DIR" >> "$_log_dir/claude.log" 2>/dev/null || true
+printf ' %q' "$@" >> "$_log_dir/claude.log" 2>/dev/null || true
+printf '\n' >> "$_log_dir/claude.log" 2>/dev/null || true
 
 # Preserve caller-provided LWD_* across .env sourcing — .env is for defaults,
 # values already in the environment (e.g. set per-agent in multica) win.
@@ -45,7 +47,7 @@ task_effort=""; task_model=""; task_provider=""; task_path=""
 task_block_seen=false; task_labels_seen=false
 _ts_log() {
   printf '%s task-settings: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" \
-    >> "$SCRIPT_DIR/claude.log" 2>/dev/null || true
+    >> "$_log_dir/claude.log" 2>/dev/null || true
 }
 case "${LWD_TASK_SETTINGS:-1}" in
   0|off|false|no) _ts_log "disabled via LWD_TASK_SETTINGS" ;;

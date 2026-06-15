@@ -91,10 +91,14 @@ case "${LWD_TASK_SETTINGS:-1}" in
   *)
     if ! command -v jq >/dev/null 2>&1; then
       _ts_log "jq not found; skipping task settings"
-    elif [ -f "$WORKSPACE_DIR/CLAUDE.md" ]; then
-      _ts_issue="$(grep -oE 'multica issue get [0-9a-fA-F-]{36}' "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | head -1 | grep -oE '[0-9a-fA-F-]{36}' || true)"
+    elif [ -f "$WORKSPACE_DIR/CLAUDE.md" ] || [ -f "$WORKSPACE_DIR/AGENTS.md" ]; then
+      # omp agents get AGENTS.md, claude agents get CLAUDE.md — honour whichever
+      # multica wrote (mirrors the --append-system-prompt injection below, which
+      # also handles both). CLAUDE.md preferred to match that contract.
+      _ts_ctx="$WORKSPACE_DIR/CLAUDE.md"; [ -f "$_ts_ctx" ] || _ts_ctx="$WORKSPACE_DIR/AGENTS.md"
+      _ts_issue="$(grep -oE 'multica issue get [0-9a-fA-F-]{36}' "$_ts_ctx" 2>/dev/null | head -1 | grep -oE '[0-9a-fA-F-]{36}' || true)"
       if [ -z "$_ts_issue" ]; then
-        _ts_log "no issue id in $WORKSPACE_DIR/CLAUDE.md; skipping"
+        _ts_log "no issue id in $_ts_ctx; skipping"
       else
         _ts_json="$("${MULTICA_BIN:-multica}" issue get "$_ts_issue" --output json 2>/dev/null || true)"
         if ! printf '%s' "$_ts_json" | jq -e '.id // empty' >/dev/null 2>&1; then
@@ -126,6 +130,10 @@ case "${LWD_TASK_SETTINGS:-1}" in
               path)     _ts_lbl_path="$_v";     task_labels_seen=true ;;
             esac
           done < <(printf '%s' "$_ts_json" | jq -r '.labels[]?.name // empty' 2>/dev/null || true)
+          # Log raw label names + parsed settings before the assignee gate, so
+          # a label that was read but never applied is still diagnosable (e.g.
+          # `provider: ollama-cloud` dropped by the gate rather than never seen).
+          _ts_log "issue $_ts_issue labels=[ $(printf '%s' "$_ts_json" | jq -r '[.labels[]?.name] | join(", ")' 2>/dev/null || true) ] -> effort='$_ts_lbl_effort' model='$_ts_lbl_model' provider='$_ts_lbl_provider' path='$_ts_lbl_path'"
           # Assignee gate (identical contract to the claude wrapper — see the
           # comment there): honour settings only when this very agent is the one
           # the work belongs to (assigned to us, or to a squad we lead). Fail
@@ -134,13 +142,13 @@ case "${LWD_TASK_SETTINGS:-1}" in
           # workspace CLAUDE.md.
           if [ "$task_labels_seen" = "true" ]; then
             _uuid_re='[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
-            _ts_agent="$(grep 'You are: ' "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | grep -oE "$_uuid_re" | head -1 || true)"
+            _ts_agent="$(grep 'You are: ' "$_ts_ctx" 2>/dev/null | grep -oE "$_uuid_re" | head -1 || true)"
             if [ -z "$_ts_agent" ]; then
               # Fallback (logged WARNING): scan every uuid in the file and ask
               # multica which resolve to an agent; apply only when exactly one
               # remains. Keeps us working if multica changes the line format.
               _ts_n=0
-              for _id in $(grep -oE "$_uuid_re" "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | sort -u || true); do
+              for _id in $(grep -oE "$_uuid_re" "$_ts_ctx" 2>/dev/null | sort -u || true); do
                 if "${MULTICA_BIN:-multica}" agent get "$_id" --output json 2>/dev/null \
                      | jq -e '.id // empty' >/dev/null 2>&1; then
                   _ts_agent="$_id"; _ts_n=$((_ts_n + 1))
@@ -211,10 +219,12 @@ case "${LWD_TASK_SETTINGS:-1}" in
           fi
         fi
       fi
+    else
+      _ts_log "no CLAUDE.md/AGENTS.md at $WORKSPACE_DIR; skipping task settings"
     fi
     ;;
 esac
-unset _ts_issue _ts_json _ts_agent _ts_atype _ts_aid _ts_apply _ts_leader _uuid_re _id _ts_n _k _v _lbl _ts_lbl_effort _ts_lbl_model _ts_lbl_provider _ts_lbl_path
+unset _ts_issue _ts_json _ts_agent _ts_atype _ts_aid _ts_apply _ts_leader _uuid_re _id _ts_n _k _v _lbl _ts_lbl_effort _ts_lbl_model _ts_lbl_provider _ts_lbl_path _ts_ctx
 
 # Task settings outrank per-agent (ambient) and global (.env) provider/model.
 # Applied after the ambient re-apply above and before provider/model selection

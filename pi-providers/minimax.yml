@@ -1,0 +1,10 @@
+# omp model strings take the form `provider/model:thinking`.
+modelRoles:
+  commit:   minimax-m3:medium
+  default:  minimax-m3:high
+  designer: minimax-m3:high
+  plan:     minimax-m3:high
+  slow:     minimax-m3:xhigh
+  smol:     minimax-m3:low
+  task:     minimax-m3:high
+  vision:   minimax-m3:medium

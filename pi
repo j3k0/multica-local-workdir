@@ -13,11 +13,20 @@ _log_pi() {
   printf ' %q' "$@" >> "$_log_dir/pi.log" 2>/dev/null || true
   printf '\n' >> "$_log_dir/pi.log" 2>/dev/null || true
 }
+# Best-effort line for wrapper decisions (provider overlay, etc.).
+_pi_log() {
+  printf '%s pi-wrapper: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" \
+    >> "$_log_dir/pi.log" 2>/dev/null || true
+}
 
-# Preserve a caller-provided LWD_PI_VARIANT across .env sourcing — .env holds
-# the default variant, a value already in the environment (set per-agent in
-# multica) wins. Same idiom as the claude wrapper's LWD_* overrides.
+# Preserve caller-provided LWD_* across .env sourcing — .env is for defaults,
+# values already in the environment (set per-agent in multica) win. Same idiom
+# as the claude wrapper's LWD_* overrides.
 _lwd_pi_variant_override="$LWD_PI_VARIANT"
+_lwd_provider_override="$LWD_PROVIDER"
+_lwd_pi_provider_override="$LWD_PI_PROVIDER"
+_lwd_model_override="$LWD_MODEL"
+_lwd_effort_override="$LWD_EFFORT"
 
 # Source optional .env file (e.g. OMP_BIN / PI_BIN / LWD_PI_VARIANT)
 if [ -f "$SCRIPT_DIR/.env" ]; then
@@ -26,8 +35,20 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
   set +a
 fi
 
-# Re-apply the ambient variant (per-agent) over the .env default.
+# Re-apply the ambient overrides (per-agent) over the .env defaults.
 [ -n "$_lwd_pi_variant_override" ] && LWD_PI_VARIANT="$_lwd_pi_variant_override"
+[ -n "$_lwd_model_override" ] && LWD_MODEL="$_lwd_model_override"
+[ -n "$_lwd_effort_override" ] && LWD_EFFORT="$_lwd_effort_override"
+# Resolve the effective provider: LWD_PI_PROVIDER (wrapper-specific) wins over
+# LWD_PROVIDER (generic fallback); ambient (per-agent) wins over .env. Each
+# layer picks the specific var when set, and the ambient layer as a whole beats
+# the .env layer. Folded into LWD_PROVIDER so the overlay-selection logic below
+# is unchanged; the task overlay is applied after the task-settings block.
+_eff_provider="${LWD_PI_PROVIDER:-${LWD_PROVIDER}}"
+_amb_provider="${_lwd_pi_provider_override:-${_lwd_provider_override}}"
+[ -n "$_amb_provider" ] && _eff_provider="$_amb_provider"
+LWD_PROVIDER="$_eff_provider"
+unset _lwd_pi_variant_override _lwd_provider_override _lwd_pi_provider_override _lwd_model_override _lwd_effort_override _eff_provider _amb_provider
 
 # Select the pi binary from LWD_PI_VARIANT (default: pi = vanilla pi).
 # omp → OMP_BIN (oh-my-pi), pi → PI_BIN. The bin paths live in .env so the
@@ -39,14 +60,222 @@ case "${LWD_PI_VARIANT:-pi}" in
   pi)  PI_BIN="${PI_BIN:-pi}" ;;
   *)   echo "pi wrapper: LWD_PI_VARIANT='$LWD_PI_VARIANT' invalid (expected: pi, omp)" >&2; exit 1 ;;
 esac
+_pi_variant="${LWD_PI_VARIANT:-pi}"
 
 _log_pi "$@"
 
+# --- Per-task settings (highest priority) -----------------------------------
+# Ported from the claude wrapper (see there for the canonical explanation).
+# multica writes the task's `multica issue get <id>` command into the workspace
+# CLAUDE.md; we read settings from its *labels* — names of the form `key: value`
+# with keys effort/model/provider/path — and they outrank per-agent (ambient
+# env) and global (.env) values. On the pi wrapper the keys map differently:
+#   provider -> LWD_PROVIDER -> omp `--config pi-providers/<name>.yml` overlay
+#               (omp variant only; the vanilla pi variant has no overlay flag
+#               and warns + ignores — see the provider-overlay block below)
+#   model    -> LWD_MODEL    -> `--model`
+#   effort   -> LWD_EFFORT   -> `--thinking` (pi/omp's reasoning-level flag; the
+#               claude wrapper's `--effort` analog — same label, native flag)
+#   path     -> working-directory override
+# Fail-open by design: any failure here skips task settings and is logged; it
+# must never abort the launch (runs every turn of every agent). Opt out with
+# LWD_TASK_SETTINGS=0.
+task_effort=""; task_model=""; task_provider=""; task_path=""
+task_block_seen=false; task_labels_seen=false
+_ts_log() {
+  printf '%s task-settings: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" \
+    >> "$_log_dir/pi.log" 2>/dev/null || true
+}
+case "${LWD_TASK_SETTINGS:-1}" in
+  0|off|false|no) _ts_log "disabled via LWD_TASK_SETTINGS" ;;
+  *)
+    if ! command -v jq >/dev/null 2>&1; then
+      _ts_log "jq not found; skipping task settings"
+    elif [ -f "$WORKSPACE_DIR/CLAUDE.md" ]; then
+      _ts_issue="$(grep -oE 'multica issue get [0-9a-fA-F-]{36}' "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | head -1 | grep -oE '[0-9a-fA-F-]{36}' || true)"
+      if [ -z "$_ts_issue" ]; then
+        _ts_log "no issue id in $WORKSPACE_DIR/CLAUDE.md; skipping"
+      else
+        _ts_json="$("${MULTICA_BIN:-multica}" issue get "$_ts_issue" --output json 2>/dev/null || true)"
+        if ! printf '%s' "$_ts_json" | jq -e '.id // empty' >/dev/null 2>&1; then
+          _ts_log "could not read issue $_ts_issue; skipping"
+        else
+          # Legacy: record whether the description still carries a
+          # `# Task Settings` block (no longer parsed) so we can still tell
+          # the agent to ignore it.
+          if printf '%s' "$_ts_json" | jq -r '.description // empty' 2>/dev/null \
+               | grep -qiE '^[[:space:]]*#+[[:space:]]*task[[:space:]]+settings[[:space:]]*$'; then
+            task_block_seen=true
+          fi
+          # Collect settings from labels named `key: value`. Split on the FIRST
+          # colon (a model value keeps its colon), lowercase/strip-spaces the
+          # key, trim the value, and drop one pair of surrounding double quotes.
+          # Unrecognised keys are other people's labels — ignored silently.
+          # Process substitution (not a pipeline) keeps the assignments here.
+          _ts_lbl_effort=""; _ts_lbl_model=""; _ts_lbl_provider=""; _ts_lbl_path=""
+          while IFS= read -r _lbl; do
+            case "$_lbl" in *:*) ;; *) continue ;; esac
+            _k="$(printf '%s' "${_lbl%%:*}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+            _v="${_lbl#*:}"
+            _v="${_v#"${_v%%[![:space:]]*}"}"; _v="${_v%"${_v##*[![:space:]]}"}"
+            case "$_v" in \"*\") _v="${_v#\"}"; _v="${_v%\"}" ;; esac
+            case "$_k" in
+              effort)   _ts_lbl_effort="$_v";   task_labels_seen=true ;;
+              model)    _ts_lbl_model="$_v";    task_labels_seen=true ;;
+              provider) _ts_lbl_provider="$_v"; task_labels_seen=true ;;
+              path)     _ts_lbl_path="$_v";     task_labels_seen=true ;;
+            esac
+          done < <(printf '%s' "$_ts_json" | jq -r '.labels[]?.name // empty' 2>/dev/null || true)
+          # Assignee gate (identical contract to the claude wrapper — see the
+          # comment there): honour settings only when this very agent is the one
+          # the work belongs to (assigned to us, or to a squad we lead). Fail
+          # closed on uncertainty. Primary identity source is the
+          # "**You are: NAME** (ID: `<uuid>`)" line multica writes into the
+          # workspace CLAUDE.md.
+          if [ "$task_labels_seen" = "true" ]; then
+            _uuid_re='[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+            _ts_agent="$(grep 'You are: ' "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | grep -oE "$_uuid_re" | head -1 || true)"
+            if [ -z "$_ts_agent" ]; then
+              # Fallback (logged WARNING): scan every uuid in the file and ask
+              # multica which resolve to an agent; apply only when exactly one
+              # remains. Keeps us working if multica changes the line format.
+              _ts_n=0
+              for _id in $(grep -oE "$_uuid_re" "$WORKSPACE_DIR/CLAUDE.md" 2>/dev/null | sort -u || true); do
+                if "${MULTICA_BIN:-multica}" agent get "$_id" --output json 2>/dev/null \
+                     | jq -e '.id // empty' >/dev/null 2>&1; then
+                  _ts_agent="$_id"; _ts_n=$((_ts_n + 1))
+                fi
+              done
+              if [ "$_ts_n" = 1 ]; then
+                _ts_log "WARNING: 'You are:' identity line not found; fell back to the sole agent id ($_ts_agent) in CLAUDE.md — multica may have changed the line format"
+              else
+                _ts_agent=""
+                if [ "$_ts_n" = 0 ]; then
+                  _ts_log "WARNING: 'You are:' identity line not found and no agent id in CLAUDE.md; not applying"
+                else
+                  _ts_log "WARNING: 'You are:' identity line not found and $_ts_n agent ids in CLAUDE.md; ambiguous, not applying"
+                fi
+              fi
+            fi
+            _ts_atype="$(printf '%s' "$_ts_json" | jq -r '.assignee_type // empty' 2>/dev/null || true)"
+            _ts_aid="$(printf '%s' "$_ts_json" | jq -r '.assignee_id // empty' 2>/dev/null || true)"
+            _ts_apply=false
+            if [ -z "$_ts_agent" ]; then
+              _ts_log "could not resolve running agent id from CLAUDE.md; not applying"
+            elif [ "$_ts_atype" = "agent" ] && [ -n "$_ts_aid" ] && [ "$_ts_aid" = "$_ts_agent" ]; then
+              _ts_apply=true
+            elif [ "$_ts_atype" = "squad" ] && [ -n "$_ts_aid" ]; then
+              _ts_leader="$("${MULTICA_BIN:-multica}" squad get "$_ts_aid" --output json 2>/dev/null | jq -r '.leader_id // empty' 2>/dev/null || true)"
+              if [ -n "$_ts_leader" ] && [ "$_ts_leader" = "$_ts_agent" ]; then
+                _ts_apply=true
+              else
+                _ts_log "squad $_ts_aid not led by this agent ($_ts_agent); not applying"
+              fi
+            else
+              _ts_log "issue assigned to ${_ts_atype:-nobody} (${_ts_aid:-none}), not this agent ($_ts_agent); not applying"
+            fi
+            if [ "$_ts_apply" = "true" ]; then
+              task_effort="$_ts_lbl_effort"; task_model="$_ts_lbl_model"
+              task_provider="$_ts_lbl_provider"; task_path="$_ts_lbl_path"
+              # Validate task-sourced values; warn-and-ignore (never abort).
+              # effort maps to pi/omp `--thinking`, whose levels are
+              # minimal/low/medium/high/xhigh. `max` is claude-only (pi has no
+              # max; xhigh is the top), so a task carrying `effort: max` is
+              # dropped here with a log line rather than passed to pi.
+              if [ -n "$task_effort" ]; then
+                case "$task_effort" in
+                  minimal|low|medium|high|xhigh) ;;
+                  *) _ts_log "ignoring invalid effort '$task_effort' (not a pi/omp thinking level)"; task_effort="" ;;
+                esac
+              fi
+              # provider is omp-only: validate the overlay file for the omp
+              # variant, and drop (with a warning) for the vanilla pi variant,
+              # which has no config-overlay flag.
+              if [ -n "$task_provider" ] && [ "$task_provider" != "anthropic" ]; then
+                if [ "$_pi_variant" = "omp" ]; then
+                  if [ ! -f "$SCRIPT_DIR/pi-providers/$task_provider.yml" ]; then
+                    _ts_log "ignoring unknown provider '$task_provider' (no pi-providers/$task_provider.yml)"; task_provider=""
+                  fi
+                else
+                  _ts_log "ignoring provider '$task_provider' (provider overlays are omp-only; LWD_PI_VARIANT=pi)"
+                  task_provider=""
+                fi
+              fi
+              if [ -n "$task_path" ] && [ ! -d "$task_path" ]; then
+                _ts_log "ignoring non-directory path '$task_path'"; task_path=""
+              fi
+              if [ -n "$task_effort$task_model$task_provider$task_path" ]; then
+                _ts_log "applied effort='$task_effort' model='$task_model' provider='$task_provider' path='$task_path'"
+              fi
+            fi
+          fi
+        fi
+      fi
+    fi
+    ;;
+esac
+unset _ts_issue _ts_json _ts_agent _ts_atype _ts_aid _ts_apply _ts_leader _uuid_re _id _ts_n _k _v _lbl _ts_lbl_effort _ts_lbl_model _ts_lbl_provider _ts_lbl_path
+
+# Task settings outrank per-agent (ambient) and global (.env) provider/model.
+# Applied after the ambient re-apply above and before provider/model selection
+# below, so a task-pinned provider selects the right overlay.
+[ -n "$task_provider" ] && LWD_PROVIDER="$task_provider"
+[ -n "$task_model" ] && LWD_MODEL="$task_model"
+
+# --- Provider overlay (omp only) --------------------------------------------
+# omp supports `--config <path>` (repeatable, deep-merged config.yml-style
+# overlay). LWD_PROVIDER here is the *resolved* effective name (task label >
+# ambient LWD_PI_PROVIDER > ambient LWD_PROVIDER > .env values; the specific
+# var wins at each layer). LWD_PROVIDER=<name> (≠ anthropic) loads
+# pi-providers/<name>.yml as that overlay — a named preset (model roles,
+# thinking, search provider, …),
+# the pi-side analog of the claude wrapper's claude-providers/<name>.sh. The
+# vanilla pi variant has no overlay flag, so LWD_PROVIDER is warned + ignored
+# there (use native --model/--provider args instead).
+# Fail loud on a missing overlay for an operator-owned LWD_PROVIDER (a typo
+# shouldn't silently fall back); task-sourced providers were already validated
+# (warn-and-ignore) above, so this only fires on operator env/.env typos.
+_pi_overlay=""
+if [ -n "$LWD_PROVIDER" ] && [ "$LWD_PROVIDER" != "anthropic" ]; then
+  if [ "$_pi_variant" = "omp" ]; then
+    _pi_overlay="$SCRIPT_DIR/pi-providers/$LWD_PROVIDER.yml"
+    if [ ! -f "$_pi_overlay" ]; then
+      echo "pi wrapper: LWD_PROVIDER='$LWD_PROVIDER' not found at $_pi_overlay" >&2
+      exit 1
+    fi
+  else
+    _pi_log "ignoring LWD_PROVIDER='$LWD_PROVIDER' (provider overlays are omp-only; LWD_PI_VARIANT=pi)"
+    echo "pi wrapper: LWD_PROVIDER='$LWD_PROVIDER' ignored (provider overlays are omp-only; set LWD_PI_VARIANT=omp)" >&2
+  fi
+fi
+
+# Task-pinned effort outranks ambient. Already validated above, so the loud
+# check below only ever fires on operator env/.env typos.
+[ -n "$task_effort" ] && LWD_EFFORT="$task_effort"
+
+# Validate LWD_EFFORT against the levels pi/omp `--thinking` accepts (the
+# intersection of omp's and pi's thinking levels). Fail loud on a typo rather
+# than letting pi reject the flag mid-session (same philosophy as the loud
+# failure on an unknown LWD_PROVIDER).
+if [ -n "$LWD_EFFORT" ]; then
+  case "$LWD_EFFORT" in
+    minimal|low|medium|high|xhigh) ;;
+    *)
+      echo "pi wrapper: LWD_EFFORT='$LWD_EFFORT' invalid (expected: minimal, low, medium, high, xhigh)" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 working_dir=""
 
-# Extract --working-directory <path> from anywhere in the argument list
+# Extract --working-directory <path> from anywhere in the argument list. Also
+# note caller-provided --model / --thinking (both space and =<value> forms) so
+# LWD_MODEL / LWD_EFFORT don't clobber them below.
 new_args=()
 skip_next=false
+has_model=false
+has_thinking=false
 for arg in "$@"; do
   if [ "$skip_next" = "true" ]; then
     working_dir="$arg"
@@ -57,6 +286,12 @@ for arg in "$@"; do
     skip_next=true
     continue
   fi
+  if [ "$arg" = "--model" ] || [ "${arg%%=*}" = "--model" ]; then
+    has_model=true
+  fi
+  if [ "$arg" = "--thinking" ] || [ "${arg%%=*}" = "--thinking" ]; then
+    has_thinking=true
+  fi
   new_args+=("$arg")
 done
 set -- "${new_args[@]}"
@@ -66,19 +301,57 @@ if [ -z "$working_dir" ] && [ ! -z "$LOCAL_WORKING_PATH" ]; then
   working_dir="$LOCAL_WORKING_PATH"
 fi
 
+# A task-pinned path outranks both --working-directory and LOCAL_WORKING_PATH
+# (already checked to be a directory during task-settings parsing).
+[ -n "$task_path" ] && working_dir="$task_path"
+
 if [ ! -z "$working_dir" ] && [ -d "$working_dir" ]; then
   cd "$working_dir"
   # Pull in the workspace's CLAUDE.md / AGENTS.md (multica agent instructions)
   # by appending them to the system prompt. pi auto-discovers context files from
   # CWD (the project), but the workspace's files aren't there after the cd.
   # pi's --append-system-prompt auto-detects file paths and reads the contents,
-  # so we pass the path directly — no shell expansion needed.
+  # so we pass the path directly. pi/omp accept the flag multiple times.
   if [ -f "$WORKSPACE_DIR/CLAUDE.md" ]; then
     set -- --append-system-prompt "$WORKSPACE_DIR/CLAUDE.md" "$@"
   fi
   if [ -f "$WORKSPACE_DIR/AGENTS.md" ]; then
     set -- --append-system-prompt "$WORKSPACE_DIR/AGENTS.md" "$@"
   fi
+  # When the issue carries settings labels (or a legacy `# Task Settings` block),
+  # tell the agent they are wrapper config, not task content. Passed as a further
+  # --append-system-prompt (text, not a file path).
+  _ts_note=""
+  if [ "$task_labels_seen" = "true" ]; then
+    _ts_note="The issue carries labels of the form \`key: value\` (effort, model, provider, path). They are configuration for the multica-local-workdir pi wrapper, not part of the task to act on. Ignore them."
+  fi
+  if [ "$task_block_seen" = "true" ]; then
+    _ts_blk_note="The issue description contains a \`# Task Settings\` block (key: value lines, possibly wrapped in an HTML comment). It is configuration for the multica-local-workdir pi wrapper (now superseded by settings labels), not part of the task to act on. Ignore it."
+    if [ -n "$_ts_note" ]; then
+      _ts_note="$_ts_note"$'\n'"$_ts_blk_note"
+    else
+      _ts_note="$_ts_blk_note"
+    fi
+  fi
+  [ -n "$_ts_note" ] && set -- --append-system-prompt "$_ts_note" "$@"
+fi
+
+# Provider overlay (omp): stack the config.yml-style overlay. Injected before
+# the model/thinking flags; a later --model / --thinking can still pin the
+# active model/reasoning on top of the overlay's roles.
+[ -n "$_pi_overlay" ] && set -- --config "$_pi_overlay" "$@"
+
+# Set the thinking level when LWD_EFFORT is set and the caller didn't already
+# pass --thinking. LWD_EFFORT is the pi-side analog of the claude wrapper's
+# effort knob; it maps to pi/omp's `--thinking` flag.
+if [ -n "$LWD_EFFORT" ] && [ "$has_thinking" = "false" ]; then
+  set -- --thinking "$LWD_EFFORT" "$@"
+fi
+
+# Pin the model when LWD_MODEL is set and the caller didn't already pass
+# --model. Overrides the overlay's default role for the session.
+if [ -n "$LWD_MODEL" ] && [ "$has_model" = "false" ]; then
+  set -- --model "$LWD_MODEL" "$@"
 fi
 
 exec "${PI_BIN:-pi}" "$@"

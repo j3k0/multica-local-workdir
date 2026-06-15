@@ -1,0 +1,20 @@
+# Z.AI (GLM) model preset for omp — the pi-side analog of
+# claude-providers/z-ai.sh. Selected via LWD_PROVIDER=z-ai (or a task
+# `provider: z-ai` label) when LWD_PI_VARIANT=omp; loaded by omp's `--config`
+# as a deep-merged overlay on top of ~/.omp/agent/config.yml.
+#
+# Requires ZAI_API_KEY in .env (or the environment), same as the claude
+# z-ai provider. This pins the text model roles to z.ai GLM models; any role
+# omitted here is inherited from the base config. LWD_MODEL still overrides the
+# default role for the session via `--model`.
+#
+# omp model strings take the form `provider/model:thinking`.
+modelRoles:
+  commit:   zai/glm-4.7:medium
+  default:  zai/glm-5.2:xhigh
+  designer: zai/glm-5.2:high
+  plan:     zai/glm-5.2:xhigh
+  slow:     zai/glm-5.2:xhigh
+  smol:     zai/glm-4.5-air:medium
+  task:     zai/glm-5.1:high
+  vision:   zai/glm-5.2:high

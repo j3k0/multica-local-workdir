@@ -1,23 +1,24 @@
 #!/bin/bash
 set -e
 
-# Switch the global LWD_PROVIDER / LWD_MODEL by editing .env in this directory.
-# Only uncommented assignments are touched (the commented examples in .env are
-# left as documentation). Setting a key that isn't present appends it.
+# Switch the claude wrapper's LWD_CLAUDE_PROVIDER / LWD_MODEL by editing .env
+# in this directory. Only uncommented assignments are touched (the commented
+# examples in .env are left as documentation). Setting a key that isn't
+# present appends it.
 #
 # Usage:
-#   ./set-provider                       Show current values and available providers
-#   ./set-provider <provider>            Set LWD_PROVIDER (validated against claude-providers/)
-#   ./set-provider <provider> <model>    Set LWD_PROVIDER and LWD_MODEL
-#   ./set-provider -m <model>            Set LWD_MODEL only
-#   ./set-provider none                  Clear LWD_PROVIDER + LWD_MODEL (back to real Anthropic)
-#   ./set-provider --clear-model         Remove LWD_MODEL (let the provider pick its default)
+#   ./set-claude-provider                           Show current values and available providers
+#   ./set-claude-provider <name>                    Set LWD_CLAUDE_PROVIDER (validated against claude-providers/)
+#   ./set-claude-provider <name> <model>            Set LWD_CLAUDE_PROVIDER and LWD_MODEL
+#   ./set-claude-provider -m <model>                Set LWD_MODEL only
+#   ./set-claude-provider none                      Clear LWD_CLAUDE_PROVIDER + LWD_MODEL (back to real Anthropic)
+#   ./set-claude-provider --clear-model             Remove LWD_MODEL (let the provider pick its default)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
 PROVIDERS_DIR="$SCRIPT_DIR/claude-providers"
 
-die() { echo "set-provider: $*" >&2; exit 1; }
+die() { echo "set-claude-provider: $*" >&2; exit 1; }
 
 available_providers() {
   for f in "$PROVIDERS_DIR"/*.sh; do
@@ -70,9 +71,9 @@ clear_env_key() {
 
 show_status() {
   local p m
-  p="$(get_env_key LWD_PROVIDER)"
+  p="$(get_env_key LWD_CLAUDE_PROVIDER)"
   m="$(get_env_key LWD_MODEL)"
-  echo "LWD_PROVIDER=${p:-<unset> (real Anthropic)}"
+  echo "LWD_CLAUDE_PROVIDER=${p:-<unset> (real Anthropic)}"
   echo "LWD_MODEL=${m:-<unset> (provider default)}"
   echo
   echo "Available providers:"
@@ -122,16 +123,16 @@ fi
 
 if [ "$set_provider" -eq 1 ]; then
   [ -f "$PROVIDERS_DIR/$provider.sh" ] || {
-    echo "set-provider: provider '$provider' not found at $PROVIDERS_DIR/$provider.sh" >&2
+    echo "set-claude-provider: provider '$provider' not found at $PROVIDERS_DIR/$provider.sh" >&2
     echo "Available providers:" >&2
     available_providers | sed 's/^/  /' >&2
     exit 1
   }
-  set_env_key LWD_PROVIDER "$provider"
+  set_env_key LWD_CLAUDE_PROVIDER "$provider"
 fi
 
 if [ "$clear_provider" -eq 1 ]; then
-  clear_env_key LWD_PROVIDER
+  clear_env_key LWD_CLAUDE_PROVIDER
   # Clearing the provider also drops the model override; it only means
   # something in a provider's context.
   clear_env_key LWD_MODEL

@@ -15,6 +15,7 @@ printf '\n' >> "$_log_dir/claude.log" 2>/dev/null || true
 # Preserve caller-provided LWD_* across .env sourcing — .env is for defaults,
 # values already in the environment (e.g. set per-agent in multica) win.
 _lwd_provider_override="$LWD_PROVIDER"
+_lwd_claude_provider_override="$LWD_CLAUDE_PROVIDER"
 _lwd_model_override="$LWD_MODEL"
 _lwd_allow_mcp_override="$LWD_ALLOW_MCP"
 _lwd_fallback_model_override="$LWD_FALLBACK_MODEL"
@@ -189,10 +190,19 @@ case "${LWD_TASK_SETTINGS:-1}" in
 esac
 unset _ts_issue _ts_json _ts_agent _ts_atype _ts_aid _ts_apply _ts_leader _uuid_re _id _ts_n _k _v _lbl _ts_lbl_effort _ts_lbl_model _ts_lbl_provider _ts_lbl_path
 
-[ -n "$_lwd_provider_override" ] && LWD_PROVIDER="$_lwd_provider_override"
 [ -n "$_lwd_model_override" ] && LWD_MODEL="$_lwd_model_override"
 [ -n "$_lwd_allow_mcp_override" ] && LWD_ALLOW_MCP="$_lwd_allow_mcp_override"
-unset _lwd_provider_override _lwd_model_override _lwd_allow_mcp_override
+# Resolve the effective provider: LWD_CLAUDE_PROVIDER (wrapper-specific) wins
+# over LWD_PROVIDER (generic fallback); ambient (per-agent) wins over .env.
+# Each layer picks the specific var when set, and the ambient layer as a whole
+# beats the .env layer (a per-agent LWD_PROVIDER outranks a .env
+# LWD_CLAUDE_PROVIDER). The result is folded into LWD_PROVIDER so the
+# selection logic below is unchanged; the task overlay is applied after.
+_eff_provider="${LWD_CLAUDE_PROVIDER:-${LWD_PROVIDER}}"
+_amb_provider="${_lwd_claude_provider_override:-${_lwd_provider_override}}"
+[ -n "$_amb_provider" ] && _eff_provider="$_amb_provider"
+LWD_PROVIDER="$_eff_provider"
+unset _lwd_provider_override _lwd_claude_provider_override _lwd_model_override _lwd_allow_mcp_override _eff_provider _amb_provider
 
 # Task settings outrank per-agent (ambient) and global (.env) provider/model.
 # Applied after the ambient re-apply above and before provider selection below,
@@ -200,7 +210,9 @@ unset _lwd_provider_override _lwd_model_override _lwd_allow_mcp_override
 [ -n "$task_provider" ] && LWD_PROVIDER="$task_provider"
 [ -n "$task_model" ] && LWD_MODEL="$task_model"
 
-# Provider selection: LWD_PROVIDER=<name> sources claude-providers/<name>.sh,
+# Provider selection: LWD_PROVIDER here is the *resolved* effective name (task
+# label > ambient LWD_CLAUDE_PROVIDER > ambient LWD_PROVIDER > .env values;
+# see the resolution block above). It sources claude-providers/<name>.sh,
 # which is expected to export ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN /
 # model defaults to redirect claude at a non-Anthropic backend. Provider
 # files may honor LWD_MODEL to pick a specific model.

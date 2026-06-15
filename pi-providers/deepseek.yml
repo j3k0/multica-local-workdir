@@ -1,0 +1,10 @@
+# omp model strings take the form `provider/model:thinking`.
+modelRoles:
+  commit:   deepseek-v4-flash:high
+  default:  deepseek-v4-pro:xhigh
+  designer: deepseek-v4-flash:xhigh
+  plan:     deepseek-v4-pro:xhigh
+  slow:     deepseek-v4-pro:xhigh
+  smol:     deepseek-v4-flash:medium
+  task:     deepseek-v4-flash:xhigh
+  vision:   deepseek-v4-flash:high

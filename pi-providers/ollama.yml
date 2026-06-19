@@ -1,0 +1,10 @@
+# omp model strings take the form `provider/model:thinking`.
+modelRoles:
+  commit:   ollama/glm-5.2:minimal
+  default:  ollama/glm-5.2:high
+  designer: ollama/minimax-m3:high
+  plan:     ollama/glm-5.2:high
+  slow:     ollama/glm-5.2:high
+  smol:     ollama/deepseep-v4-flash:medium
+  task:     ollama/glm-5.2:medium
+  vision:   ollama/minimax-m3:high

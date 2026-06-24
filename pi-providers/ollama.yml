@@ -2,9 +2,10 @@
 modelRoles:
   commit:   ollama/glm-5.2:minimal
   default:  ollama/glm-5.2:high
-  designer: ollama/minimax-m3:high
+  designer: ollama/kimi-2.7-code:high
   plan:     ollama/glm-5.2:high
   slow:     ollama/glm-5.2:high
   smol:     ollama/deepseep-v4-flash:medium
   task:     ollama/glm-5.2:medium
-  vision:   ollama/minimax-m3:high
+  vision:   ollama/kimi-2.7-code:high
+

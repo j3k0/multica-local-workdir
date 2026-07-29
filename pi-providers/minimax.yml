@@ -7,4 +7,4 @@ modelRoles:
   slow:     minimax-m3:xhigh
   smol:     minimax-m3:low
   task:     minimax-m3:high
-  vision:   minimax-m3:medium
+  vision:   opencode-go/minimax-m3:medium

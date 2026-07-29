@@ -8,3 +8,8 @@ modelRoles:
   smol:     deepseek-v4-flash:low
   task:     deepseek-v4-flash:high
   vision:   deepseek-v4-flash:medium
+modelProviderOrder: 
+  - ollama
+  - opencode-go
+  - deepseek
+  - openrouter

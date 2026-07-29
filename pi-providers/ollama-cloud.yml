@@ -1,10 +1,10 @@
 # omp model strings take the form `provider/model:thinking`.
 modelRoles:
-  commit:   ollama-cloud/glm-5.2:minimal
-  default:  ollama-cloud/glm-5.2:high
+  commit:   ollama-cloud/kimi-k3:minimal
+  default:  ollama-cloud/kimi-k3:auto
   designer: ollama-cloud/minimax-m3:high
-  plan:     ollama-cloud/glm-5.2:high
-  slow:     ollama-cloud/glm-5.2:high
+  plan:     ollama-cloud/kimi-k3:high
+  slow:     ollama-cloud/kimi-k3:max
   smol:     ollama-cloud/deepseep-v4-flash:medium
-  task:     ollama-cloud/glm-5.2:high
+  task:     ollama-cloud/kimi-k3:high
   vision:   ollama-cloud/minimax-m3:high

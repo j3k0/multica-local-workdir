@@ -1,0 +1,10 @@
+# omp model strings take the form `provider/model:thinking`.
+modelRoles:
+  commit:   opencode-go/glm-5.2:minimal
+  default:  opencode-go/glm-5.2:max
+  designer: opencode-go/minimax-m3:high
+  plan:     opencode-go/glm-5.2:high
+  slow:     opencode-go/glm-5.2:high
+  smol:     opencode-go/deepseep-v4-flash:medium
+  task:     opencode-go/glm-5.2:medium
+  vision:   opencode-go/minimax-m3:high

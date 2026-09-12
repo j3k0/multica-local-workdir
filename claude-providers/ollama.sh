@@ -3,10 +3,10 @@
 # from that invocation. Requires `ollama signin` for cloud models; no
 # separate API key is needed in this file (the local daemon at 127.0.0.1:11434
 # handles auth).
-# Override the model with LWD_MODEL (default: glm-5.1:cloud).
+# Override the model with LWD_MODEL (default: glm-5.3:cloud).
 # For other configurations create a sibling provider file.
 
-model="${LWD_MODEL:-glm-5.2:cloud}"
+model="${LWD_MODEL:-glm-5.3:cloud}"
 
 export ANTHROPIC_AUTH_TOKEN=ollama
 export ANTHROPIC_BASE_URL=http://127.0.0.1:11434

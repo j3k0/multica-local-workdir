@@ -10,11 +10,11 @@
 #
 # omp model strings take the form `provider/model:thinking`.
 modelRoles:
-  commit:   zai/glm-4.7:medium
-  default:  zai/glm-5.2:xhigh
-  designer: zai/glm-5.2:high
-  plan:     zai/glm-5.2:xhigh
-  slow:     zai/glm-5.2:xhigh
-  smol:     zai/glm-4.5-air:medium
-  task:     zai/glm-5.1:high
-  vision:   zai/glm-5.2:high
+  commit:   zai/glm-5.3-flash:medium
+  default:  zai/glm-5.3:xhigh
+  designer: zai/glm-5.3:high
+  plan:     zai/glm-5.3:xhigh
+  slow:     zai/glm-5.3:xhigh
+  smol:     zai/glm-5.3-flash:medium
+  task:     zai/glm-5.3:high
+  vision:   zai/glm-5.3:high

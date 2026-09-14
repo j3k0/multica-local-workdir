@@ -1,0 +1,94 @@
+#!/bin/bash
+set -e
+
+# Register (or refresh) a multica custom runtime profile that runs oh-my-pi
+# through this repo's `omp` wrapper, and pin this machine's path to it.
+#
+# Why: multica natively detects `omp` ("Oh-My-Pi" runtime, pi protocol family).
+# Since CLI 0.4.26 a MULTICA_OMP_PATH override exists and `multica-daemon`
+# exports it — so on machines started via ./multica-daemon this profile is
+# unnecessary. Use this profile only for daemons NOT launched through
+# ./multica-daemon: a custom runtime profile whose command is the wrapper.
+# The profile is workspace-scoped; the path pin is per-machine (this one).
+#
+# Idempotent: an existing profile with the same command name is reused.
+#
+# Usage:
+#   ./set-omp-profile                 Create (if needed) and pin the profile for this machine
+#   ./set-omp-profile --unpin         Remove this machine's path override
+#   ./set-omp-profile --status        Show the profile and this machine's pin
+#
+# After (re)pinning, restart the daemon when convenient so it re-registers:
+#   multica daemon restart        # WARNING: kills running tasks on this machine
+# Then create agents on the new "Oh-My-Pi LWD" runtime and set their per-agent
+# env (LOCAL_WORKING_PATH, LWD_PROVIDER, LWD_EFFORT, …) in multica.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MULTICA="${MULTICA_BIN:-multica}"
+PROFILE_NAME="Oh-My-Pi LWD"
+COMMAND_NAME="omp-lwd"
+WRAPPER="$SCRIPT_DIR/omp"
+
+die() { echo "set-omp-profile: $*" >&2; exit 1; }
+
+command -v "$MULTICA" >/dev/null 2>&1 || die "multica not found on PATH"
+command -v jq >/dev/null 2>&1 || die "jq not found on PATH"
+[ -x "$WRAPPER" ] || die "wrapper not executable: $WRAPPER"
+
+# Print the id of our profile, or nothing.
+find_profile() {
+  "$MULTICA" runtime profile list --output json 2>/dev/null \
+    | jq -r --arg cmd "$COMMAND_NAME" '.[]? | select(.command_name == $cmd) | .id' 2>/dev/null \
+    | head -1
+}
+
+show_status() {
+  local id
+  id="$(find_profile)"
+  if [ -z "$id" ]; then
+    echo "Profile: <none> (command_name=$COMMAND_NAME not registered in this workspace)"
+  else
+    echo "Profile: $PROFILE_NAME ($id)"
+    "$MULTICA" runtime profile list 2>/dev/null | grep -E "^ID|$id" || true
+  fi
+  echo "Wrapper: $WRAPPER"
+}
+
+case "${1:-}" in
+  -h|--help)
+    sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  --status)
+    show_status; exit 0 ;;
+  --unpin)
+    id="$(find_profile)"
+    [ -n "$id" ] || die "no profile with command_name=$COMMAND_NAME in this workspace"
+    "$MULTICA" runtime profile unset-path "$id"
+    echo "Removed this machine's path override for profile $id."
+    echo "Restart the daemon when convenient to re-register: multica daemon restart"
+    exit 0 ;;
+  "") ;;
+  *) die "unknown option: $1" ;;
+esac
+
+profile_id="$(find_profile)"
+if [ -z "$profile_id" ]; then
+  profile_id="$("$MULTICA" runtime profile create \
+    --display-name "$PROFILE_NAME" \
+    --command-name "$COMMAND_NAME" \
+    --protocol-family pi \
+    --description "oh-my-pi via the multica-local-workdir omp wrapper (per-agent LOCAL_WORKING_PATH, provider overlays, task labels)" \
+    --output json | jq -r '.id')"
+  [ -n "$profile_id" ] || die "profile creation failed"
+  echo "Created profile $PROFILE_NAME ($profile_id)"
+else
+  echo "Reusing existing profile $PROFILE_NAME ($profile_id)"
+fi
+
+"$MULTICA" runtime profile set-path "$profile_id" --path "$WRAPPER"
+echo "Pinned this machine's path: $WRAPPER"
+echo
+echo "Next steps:"
+echo "  1. Restart the daemon when convenient (kills running tasks): multica daemon restart"
+echo "  2. Create agents on the '$PROFILE_NAME' runtime."
+echo "  3. Set per-agent env in multica: LOCAL_WORKING_PATH=/abs/project/dir (and"
+echo "     optionally LWD_PROVIDER / LWD_MODEL / LWD_EFFORT), concurrency: 1."

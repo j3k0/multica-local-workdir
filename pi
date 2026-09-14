@@ -316,6 +316,17 @@ fi
 [ -n "$task_path" ] && working_dir="$task_path"
 
 if [ ! -z "$working_dir" ] && [ -d "$working_dir" ]; then
+  # Warn when the launch dir is not a multica workspace: multica may have
+  # already placed this task via a project `local_directory` resource, and our
+  # path override is about to win over it. Path-based detection: workspaces
+  # live under MULTICA_WORKSPACES_ROOT (default ~/multica_workspaces); the
+  # daemon exports that var when customized, and agents inherit it.
+  _ws_root="${MULTICA_WORKSPACES_ROOT:-$HOME/multica_workspaces}"
+  case "$WORKSPACE_DIR" in
+    "$_ws_root"/*) ;;
+    *) _pi_log "WARNING: launch dir '$WORKSPACE_DIR' is not under the workspaces root ($_ws_root); wrapper path override '$working_dir' wins over multica's own placement (project local_directory?)" ;;
+  esac
+  unset _ws_root
   cd "$working_dir"
   # Pull in the workspace's CLAUDE.md / AGENTS.md (multica agent instructions)
   # by appending them to the system prompt. pi auto-discovers context files from

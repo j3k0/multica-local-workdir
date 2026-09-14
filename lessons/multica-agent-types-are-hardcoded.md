@@ -1,5 +1,15 @@
 # multica agent types are a compiled-in enum (as of CLI v0.3.16)
 
+UPDATE 2026-08-16 (v0.4.22): still true for the override enum (no omp in it),
+but omp IS now a natively detected runtime riding the pi protocol family, and
+custom runtime profiles + local_directory resources cover most wrapper use
+cases. See multica-native-omp-and-local-directory.md.
+
+UPDATE 2026-08-18 (v0.4.26): `MULTICA_OMP_PATH` exists and is honored by the
+daemon (verified: a test-profile daemon executed the override binary for
+detection and registered "Oh-My-Pi" from it). `multica-daemon` now exports it
+pointing at the repo's `omp` shim.
+
 You CANNOT add a new agent/provider to multica with a wrapper script alone. The
 set of agent types is hardcoded in the Go binary
 (`/opt/homebrew/Cellar/multica/<ver>/bin/multica`). Verified via `strings`:

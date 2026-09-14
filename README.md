@@ -73,6 +73,25 @@ multica injects `--strict-mcp-config` into the `claude` CLI, which makes claude 
 
 Set `LWD_ALLOW_MCP=1` in `.env` (or per-agent in multica) and the `claude` wrapper strips the flag before exec'ing the CLI. Default is off — only opt in if you trust every MCP server the project can reach. The env var can also be set per agent in multica.
 
+## oh-my-pi (omp)
+
+multica (≥0.4.21) natively detects `omp` and registers an **Oh-My-Pi** runtime per workspace, so basic omp use needs no wrapper. Since CLI 0.4.26 there is also a `MULTICA_OMP_PATH` override (verified 2026-08-18), and `multica-daemon` exports it pointing at the `omp` shim here — so on machines launched via this repo's `multica-daemon`, the native Oh-My-Pi runtime itself runs through the wrapper (per-agent `LOCAL_WORKING_PATH`, `pi-providers/*.yml` overlays, task labels; the shim pins `LWD_PI_VARIANT=omp`). Just restart the daemon:
+
+```bash
+./multica-daemon   # or: multica daemon restart, if it was started via this script
+```
+
+On machines where the daemon is started *without* this repo's `multica-daemon`, the alternative is a **custom runtime profile** pointed at the `omp` shim (omp speaks pi's protocol, so the profile's protocol family is `pi`):
+
+```bash
+./set-omp-profile   # creates the "Oh-My-Pi LWD" profile + pins this machine to ./omp
+multica daemon restart   # when convenient — re-registers runtimes
+```
+
+Then create agents on the *Oh-My-Pi* runtime (or *Oh-My-Pi LWD* in the profile case) and set their env in multica (`LOCAL_WORKING_PATH`, `LWD_PROVIDER`, `LWD_EFFORT`, …, concurrency 1) — same contract as the `pi` wrapper.
+
+Also consider the native alternative first: a **project resource** of type `local_directory` (`multica project resource add <project> --type local_directory --local-path /abs/path --daemon-id <id>`) makes multica itself run the project's tasks in that directory — one per project per daemon, with native serialization (`in_place`) or per-task git worktrees (`worktree`). It covers per-machine path differences but **not** several directories per project on one machine or per-agent paths — that's what the wrapper remains for. If both are configured for the same run, the wrapper's path wins and logs a warning to `logs/pi.log`.
+
 ## Routing claude through a different provider
 
 Set `LWD_PROVIDER=<name>` and the `claude` wrapper sources `claude-providers/<name>.sh` before exec'ing the CLI. The provider file is just a bash file that exports `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, model defaults, etc. — claude itself does the rest.

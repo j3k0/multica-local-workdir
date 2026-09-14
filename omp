@@ -1,0 +1,23 @@
+#!/bin/bash
+set -e
+
+# omp wrapper: the `pi` wrapper pinned to the omp (oh-my-pi) variant.
+#
+# Why this exists: multica natively detects `omp` as its own runtime ("Oh-My-Pi",
+# pi protocol family). Since CLI 0.4.26 the MULTICA_OMP_PATH override exists
+# (verified 2026-08-18: a throwaway-profile daemon ran the override binary for
+# detection), so `multica-daemon` exports it pointing here — native Oh-My-Pi
+# agents then get the wrapper features (per-agent LOCAL_WORKING_PATH, provider
+# overlays, task labels). On machines NOT using this repo's `multica-daemon`,
+# the fallback is a custom runtime profile pointed at this script:
+#   multica runtime profile create --protocol-family pi --command-name omp-lwd \
+#     --display-name "Oh-My-Pi LWD"
+#   multica runtime profile set-path <profile-id> --path /abs/path/to/this/omp
+# (`set-omp-profile` does both.)
+#
+# Exporting LWD_PI_VARIANT=omp here makes it ambient for the `pi` wrapper, where
+# ambient values beat .env — so the variant is pinned no matter what .env says.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export LWD_PI_VARIANT=omp
+exec "$SCRIPT_DIR/pi" "$@"

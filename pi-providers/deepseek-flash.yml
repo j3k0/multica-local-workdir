@@ -1,14 +1,15 @@
 # omp model strings take the form `provider/model:thinking`.
 modelRoles:
-  commit:   deepseek-flash:medium
-  default:  deepseek-flash:high
-  designer: deepseek-flash:high
-  plan:     deepseek-flash:high
-  slow:     deepseek-flash:xhigh
-  smol:     deepseek-flash:low
-  task:     deepseek-flash:high
-  vision:   deepseek-flash:medium
+  commit:   deepseek-v4.1-flash:medium
+  default:  deepseek-v4.1-flash:high
+  designer: deepseek-v4.1-flash:high
+  plan:     deepseek-v4.1-flash:high
+  slow:     deepseek-v4.1-flash:xhigh
+  smol:     deepseek-v4.1-flash:low
+  task:     deepseek-v4.1-flash:high
+  vision:   deepseek-v4.1-flash:medium
 modelProviderOrder: 
+ -  ollama-cloud
   - ollama
   - opencode-go
   - deepseek

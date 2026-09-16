@@ -1,11 +1,11 @@
 # omp model strings take the form `provider/model:thinking`.
 modelRoles:
   commit:   ollama/glm-5.3-flash:minimal
-  default:  ollama/kimi-k3:max
-  designer: ollama/kimi-k3:high
-  plan:     ollama/kimi-k3:high
-  slow:     ollama/kimi-k3:max
+  default:  ollama/glm-5.3-flash:max
+  designer: ollama/glm-5.3-flash:high
+  plan:     ollama/glm-5.3-flash:high
+  slow:     ollama/glm-5.3:high
   smol:     ollama/glm-5.3-flash:medium
-  task:     ollama/kimi-k3:high
-  vision:   ollama/kimi-k3:high
+  task:     ollama/glm-5.3-flash:high
+  vision:   ollama/deepseek-4.1-flash:high
 

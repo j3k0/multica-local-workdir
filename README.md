@@ -92,6 +92,24 @@ Then create agents on the *Oh-My-Pi* runtime (or *Oh-My-Pi LWD* in the profile c
 
 Also consider the native alternative first: a **project resource** of type `local_directory` (`multica project resource add <project> --type local_directory --local-path /abs/path --daemon-id <id>`) makes multica itself run the project's tasks in that directory — one per project per daemon, with native serialization (`in_place`) or per-task git worktrees (`worktree`). It covers per-machine path differences but **not** several directories per project on one machine or per-agent paths — that's what the wrapper remains for. If both are configured for the same run, the wrapper's path wins and logs a warning to `logs/pi.log`.
 
+### Per-agent hindsight memory bank (omp)
+
+omp's hindsight backend scopes memory **per working directory** by default, and multica runs every task from a scratch workspace (`~/multica_workspaces/<uuid>/.../workdir`) — so all of an agent's runs share one `omp-workdir` bank, indistinguishable from every other agent's. Set `LWD_HINDSIGHT_BANK_ID=<id>` per agent in multica (lowercase alnum plus `. _ -`) and the `pi` wrapper exports `HINDSIGHT_BANK_ID=<id>` with `HINDSIGHT_SCOPING=global`, giving that agent one named bank across all of its tasks and projects:
+
+```bash
+multica agent env set <agent-id> LWD_HINDSIGHT_BANK_ID=iapg-sup
+```
+
+The wrapper also exports `HINDSIGHT_RETAIN_EVERY_N_TURNS` (default `1`, override with `LWD_HINDSIGHT_RETAIN_EVERY_N_TURNS`). omp's own default is 3, counted in cumulative user turns per session — multica's print-mode runs are single-turn, so without this a task thread that is never resumed retains nothing, and a resumed one only starts retaining on its third run.
+
+Notes and caveats:
+
+- **Scoping=global is only set together with a bank id.** omp's per-project scoping turns the bank id into a *prefix* (`<id>-<cwd-basename>`), which would keep the memory scattered per directory; setting `global` on its own would instead merge every agent into one shared bank.
+- **A global bank gets `user-preferences` as its only mental model.** omp seeds its mental models per scope, and the two project-scoped seeds (`project-conventions`, `project-decisions`) don't apply to `global`. If per-agent-per-project memory turns out to matter more than one flat bank, the fallback is `HINDSIGHT_SCOPING=per-project-tagged`: same exact bank id, all three mental models, but recall is filtered by a `project:<dir>` tag.
+- Resolved per launch with the usual layering (per-agent env > `.env`), logged to `logs/pi.log` alongside the bank id so the effective routing is visible. An empty or invalid id is ignored with a log line — it never aborts the run — and agents without the knob keep omp's config defaults, exactly as before.
+- Setting `HINDSIGHT_BANK_ID` directly in an agent's env also works, but without the wrapper's scoping override it keeps the per-directory prefix behavior — prefer `LWD_HINDSIGHT_BANK_ID`.
+- Bank ids are auto-created on first retain and cannot be renamed, so a typo quietly leaves an empty bank behind.
+
 ## Routing claude through a different provider
 
 Set `LWD_PROVIDER=<name>` and the `claude` wrapper sources `claude-providers/<name>.sh` before exec'ing the CLI. The provider file is just a bash file that exports `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, model defaults, etc. — claude itself does the rest.

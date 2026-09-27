@@ -1,0 +1,58 @@
+{
+  "hindsight_api": "http://localhost:8888",
+  "bank_prefix": "agent-",
+  "env_var": "LWD_HINDSIGHT_BANK_ID",
+  "scoping_env_var": "LWD_HINDSIGHT_SCOPING",
+  "agents": [
+    {
+      "agent_id": "00000000-0000-0000-0000-000000000000",
+      "name": "Example Agent",
+      "role": "short role description (used in the bank missions)",
+      "runtime_id": "00000000-0000-0000-0000-000000000000",
+      "runtime_provider": "pi",
+      "selected": true,
+      "bank_id": "agent-exampleagent",
+      "scoping": "global",
+      "reflect_mission": "You are the memory agent for Example Agent (short role description). You serve Example Agent only: your answers are consumed by that agent as tool results, never shown to humans directly. Recall the durable facts its work depends on — decisions and their rationale, environment and infrastructure state, user preferences, recurring problems and their fixes, and established conventions. Quote exact identifiers, paths, commands, and decisions verbatim rather than paraphrasing. When memories conflict, the latest decision wins; say when an earlier rule was superseded. If nothing in memory answers the question, say so in one plain sentence — a wrong-but-confident nearest match is worse than an honest miss.",
+      "retain_mission": "Extract durable facts for Example Agent (short role description): decisions and their rationale, environment and infrastructure state, user preferences, recurring problems and their fixes, and established conventions. Ignore agent-platform instructions (pi, omp, multica, claude), harness and memory meta-discussion, transient task state, one-off requests, and greetings.",
+      "observations_mission": "Durable patterns and evolving preferences across Example Agent's sessions. Merge repeated patterns into single observations, ignore transient states and one-off events, and flag contradictions with prior observations. Context: short role description.",
+      "mental_models": [
+        {
+          "id": "user-preferences",
+          "name": "User Preferences",
+          "max_tokens": 600,
+          "source_query": "What does the user durably prefer in coding style, tooling, communication, and review? Capture only preferences that have held across multiple sessions; exclude one-off requests and transient context.",
+          "trigger": { "refresh_after_consolidation": true }
+        },
+        {
+          "id": "red-lines",
+          "name": "Red Lines & Standing Rules",
+          "max_tokens": 600,
+          "source_query": "What explicit standing rules, red lines, and 'do not do this' instructions has the user given that should persist going forward? Capture only rules meant to apply generally; exclude one-off corrections and task-specific constraints.",
+          "trigger": { "refresh_after_consolidation": true }
+        },
+        {
+          "id": "where-things-live",
+          "name": "Systems of Record & Locations",
+          "max_tokens": 800,
+          "source_query": "Where do key things live, and what are the systems of record — repositories, inventory files, dashboards, credential stores, runbooks, documentation? Record each location, its purpose, and how to reach it. Do NOT record the volatile contents of those sources. Where several projects are involved, state which project each location belongs to.",
+          "trigger": { "refresh_after_consolidation": true }
+        },
+        {
+          "id": "decision-log",
+          "name": "Decision Log",
+          "max_tokens": 800,
+          "source_query": "What durable decisions have been made, and with what rationale or trade-offs? Include decisions that superseded earlier ones and mark what they replaced. Exclude transient plans, open questions, and unresolved ideas. Where several projects are involved, state which project each decision applies to.",
+          "trigger": { "refresh_after_consolidation": true }
+        },
+        {
+          "id": "failure-modes",
+          "name": "Failure Modes & Fixes",
+          "max_tokens": 1000,
+          "source_query": "What recurring failure modes, bugs, and gotchas have been encountered, and how were they diagnosed and fixed? Note the version, date, or context where relevant so that workarounds superseded by a later fix are clearly marked as such.",
+          "trigger": { "refresh_after_consolidation": true }
+        }
+      ]
+    }
+  ]
+}

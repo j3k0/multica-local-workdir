@@ -28,6 +28,7 @@ _lwd_pi_provider_override="$LWD_PI_PROVIDER"
 _lwd_model_override="$LWD_MODEL"
 _lwd_effort_override="$LWD_EFFORT"
 _lwd_hindsight_bank_override="$LWD_HINDSIGHT_BANK_ID"
+_lwd_hindsight_scoping_override="$LWD_HINDSIGHT_SCOPING"
 _lwd_hindsight_retain_override="$LWD_HINDSIGHT_RETAIN_EVERY_N_TURNS"
 
 # Source optional .env file (e.g. OMP_BIN / PI_BIN / LWD_PI_VARIANT)
@@ -42,6 +43,7 @@ fi
 [ -n "$_lwd_model_override" ] && LWD_MODEL="$_lwd_model_override"
 [ -n "$_lwd_effort_override" ] && LWD_EFFORT="$_lwd_effort_override"
 [ -n "$_lwd_hindsight_bank_override" ] && LWD_HINDSIGHT_BANK_ID="$_lwd_hindsight_bank_override"
+[ -n "$_lwd_hindsight_scoping_override" ] && LWD_HINDSIGHT_SCOPING="$_lwd_hindsight_scoping_override"
 [ -n "$_lwd_hindsight_retain_override" ] && LWD_HINDSIGHT_RETAIN_EVERY_N_TURNS="$_lwd_hindsight_retain_override"
 # Resolve the effective provider: LWD_PI_PROVIDER (wrapper-specific) wins over
 # LWD_PROVIDER (generic fallback); ambient (per-agent) wins over .env. Each
@@ -58,12 +60,13 @@ unset _lwd_pi_variant_override _lwd_provider_override _lwd_pi_provider_override 
 # Per-agent memory bank. omp reads HINDSIGHT_BANK_ID / HINDSIGHT_SCOPING /
 # HINDSIGHT_RETAIN_EVERY_N_TURNS natively (env beats config), so this is an
 # env-only mapping — no CLI flag involved.
-#   * HINDSIGHT_SCOPING=global is exported *only* alongside an explicit bank id.
-#     With omp's per-project scoping (pinned in ~/.omp/agent/config.yml) the id
-#     acts as a prefix, so `<id>` alone would still scatter one agent's memory
-#     across `<id>-<cwd-basename>` — the scratch-workdir funnel this knob exists
-#     to fix. Setting global unconditionally is the opposite failure: every agent
-#     without a bank id would collapse into one shared bank.
+#   * HINDSIGHT_SCOPING comes from LWD_HINDSIGHT_SCOPING (default: global).
+#     global = one flat bank per agent. per-project-tagged = the *same* bank id,
+#     but retains carry a project:<dir> tag, so recall returns this project's
+#     memories plus the untagged agent-level ones, and omp's project-scoped
+#     mental models apply. With omp's config default (per-project) the id would
+#     act as a prefix and scatter memory across `<id>-<cwd-basename>` — the
+#     scratch-workdir funnel; setting a scoping here pins the exact bank id.
 #   * RETAIN_EVERY_N_TURNS=1 makes every run retain. omp defaults to 3, counted
 #     as cumulative user turns in the session from a counter that starts at 0 in
 #     every process. multica invokes print-mode single-turn runs, so a thread
@@ -88,9 +91,16 @@ if [ -n "$_hs_bank" ]; then
   esac
 fi
 if [ -n "$_hs_bank" ]; then
-  _hs_scoping="${HINDSIGHT_SCOPING:-}"
-  if [ -n "$_hs_scoping" ] && [ "$_hs_scoping" != "global" ]; then
-    _pi_log "WARNING: overriding ambient HINDSIGHT_SCOPING='$_hs_scoping' with 'global' (explicit bank id)"
+  _hs_scoping="${LWD_HINDSIGHT_SCOPING:-global}"
+  case "$_hs_scoping" in
+    global|per-project|per-project-tagged) ;;
+    *)
+      _pi_log "ignoring LWD_HINDSIGHT_SCOPING='$_hs_scoping' (expected global|per-project|per-project-tagged); using global"
+      _hs_scoping=global
+      ;;
+  esac
+  if [ -n "${HINDSIGHT_SCOPING:-}" ] && [ "${HINDSIGHT_SCOPING}" != "$_hs_scoping" ]; then
+    _pi_log "WARNING: overriding ambient HINDSIGHT_SCOPING='${HINDSIGHT_SCOPING}' with '$_hs_scoping'"
   fi
   _hs_retain="${LWD_HINDSIGHT_RETAIN_EVERY_N_TURNS:-}"
   case "$_hs_retain" in
@@ -101,7 +111,7 @@ if [ -n "$_hs_bank" ]; then
       ;;
   esac
   export HINDSIGHT_BANK_ID="$_hs_bank"
-  export HINDSIGHT_SCOPING=global
+  export HINDSIGHT_SCOPING="$_hs_scoping"
   export HINDSIGHT_RETAIN_EVERY_N_TURNS="$_hs_retain"
   # _log_pi records argv only, so without this line the env-only change would be
   # invisible in pi.log.
@@ -109,13 +119,13 @@ if [ -n "$_hs_bank" ]; then
 elif [ -n "${HINDSIGHT_BANK_ID:-}" ]; then
   # Bank id set directly in the agent env instead of via the LWD_ knob: omp
   # honours it as-is, but under the config's per-project scoping it acts as a
-  # prefix. Use LWD_HINDSIGHT_BANK_ID (which also pins global scoping) for an
-  # exact bank id.
+  # prefix. Use LWD_HINDSIGHT_BANK_ID (with LWD_HINDSIGHT_SCOPING) for an exact
+  # bank id.
   _pi_log "hindsight: LWD_HINDSIGHT_BANK_ID unset; ambient HINDSIGHT_BANK_ID='$HINDSIGHT_BANK_ID' passed through (no scoping override)"
 else
   _pi_log "hindsight: no bank id (LWD_HINDSIGHT_BANK_ID unset/empty); HINDSIGHT_* left to omp config defaults"
 fi
-unset _lwd_hindsight_bank_override _lwd_hindsight_retain_override _hs_bank _hs_retain _hs_scoping
+unset _lwd_hindsight_bank_override _lwd_hindsight_scoping_override _lwd_hindsight_retain_override _hs_bank _hs_retain _hs_scoping
 
 # Select the pi binary from LWD_PI_VARIANT (default: pi = vanilla pi).
 # omp → OMP_BIN (oh-my-pi), pi → PI_BIN. The bin paths live in .env so the

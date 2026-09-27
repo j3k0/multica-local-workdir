@@ -94,7 +94,7 @@ Also consider the native alternative first: a **project resource** of type `loca
 
 ### Per-agent hindsight memory bank (omp)
 
-omp's hindsight backend scopes memory **per working directory** by default, and multica runs every task from a scratch workspace (`~/multica_workspaces/<uuid>/.../workdir`) — so all of an agent's runs share one `omp-workdir` bank, indistinguishable from every other agent's. Set `LWD_HINDSIGHT_BANK_ID=<id>` per agent in multica (lowercase alnum plus `. _ -`) and the `pi` wrapper exports `HINDSIGHT_BANK_ID=<id>` with `HINDSIGHT_SCOPING=global`, giving that agent one named bank across all of its tasks and projects:
+omp's hindsight backend scopes memory **per working directory** by default, and multica runs every task from a scratch workspace (`~/multica_workspaces/<uuid>/.../workdir`) — so all of an agent's runs share one `omp-workdir` bank, indistinguishable from every other agent's. Set `LWD_HINDSIGHT_BANK_ID=<id>` per agent in multica (lowercase alnum plus `. _ -`) and the `pi` wrapper exports `HINDSIGHT_BANK_ID=<id>`, giving that agent one named bank across all of its tasks and projects. The scope is `LWD_HINDSIGHT_SCOPING` (default `global`; also `per-project-tagged`, see below):
 
 ```bash
 multica agent env set <agent-id> LWD_HINDSIGHT_BANK_ID=iapg-sup
@@ -104,7 +104,7 @@ The wrapper also exports `HINDSIGHT_RETAIN_EVERY_N_TURNS` (default `1`, override
 
 Notes and caveats:
 
-- **Scoping=global is only set together with a bank id.** omp's per-project scoping turns the bank id into a *prefix* (`<id>-<cwd-basename>`), which would keep the memory scattered per directory; setting `global` on its own would instead merge every agent into one shared bank.
+- **Scoping** (`LWD_HINDSIGHT_SCOPING`, default `global`) is applied *only* with an explicit bank id. `global` = one flat bank per agent. `per-project-tagged` = the *same* bank id, but each retain is tagged `project:<cwd-basename>`: recall returns this project's memories plus the untagged agent-level ones, and omp's project-scoped mental models (`project-conventions`, `project-decisions`) apply. Use it for project-bound agents (dev, sysadmin); `global` for role agents (support, PM, CoS). omp's config default is `per-project`, which turns the id into a *prefix* (`<id>-<cwd-basename>`) — the wrapper overrides it so the id is exact.
 - **A global bank gets `user-preferences` as its only mental model.** omp seeds its mental models per scope, and the two project-scoped seeds (`project-conventions`, `project-decisions`) don't apply to `global`. If per-agent-per-project memory turns out to matter more than one flat bank, the fallback is `HINDSIGHT_SCOPING=per-project-tagged`: same exact bank id, all three mental models, but recall is filtered by a `project:<dir>` tag.
 - Resolved per launch with the usual layering (per-agent env > `.env`), logged to `logs/pi.log` alongside the bank id so the effective routing is visible. An empty or invalid id is ignored with a log line — it never aborts the run — and agents without the knob keep omp's config defaults, exactly as before.
 - Setting `HINDSIGHT_BANK_ID` directly in an agent's env also works, but without the wrapper's scoping override it keeps the per-directory prefix behavior — prefer `LWD_HINDSIGHT_BANK_ID`.

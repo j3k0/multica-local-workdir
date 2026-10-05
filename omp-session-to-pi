@@ -1,0 +1,88 @@
+#!/bin/bash
+set -e
+
+# omp-session-to-pi: make omp (oh-my-pi) session files resumable by vanilla pi.
+#
+# omp writes a `{"type":"title",...}` line before the `{"type":"session",...}`
+# header; vanilla pi requires the session header to be the first entry and
+# rejects anything else ("Session file is not a valid pi session"). Everything
+# after the title line is already pi's v3 session format (omp's extra `custom`
+# entries are a type pi knows and keeps out of the model context), so the
+# conversion is: drop line 1.
+#
+# Per file:
+#   - first line not an omp title  -> left alone ("ok"), exit status unaffected
+#   - title line but line 2 is not a session header -> refused (unknown shape)
+#   - otherwise: back up to <file>.omp.bak (unless --no-backup or a backup
+#     already exists), write the remainder to a temp file in the same dir,
+#     and rename it over the original (atomic; a crash never leaves a half file)
+# Idempotent: re-running on a converted file is a no-op.
+#
+# Usage: omp-session-to-pi [--dry-run] [--no-backup] [--quiet] FILE...
+# Exit: 0 if every file is pi-loadable afterwards (converted or already ok),
+#       1 if any file was refused or failed, 2 on usage error.
+
+usage() { echo "usage: $(basename "$0") [--dry-run] [--no-backup] [--quiet] FILE..." >&2; exit 2; }
+
+dry_run=false
+backup=true
+quiet=false
+files=()
+end_opts=false
+for arg in "$@"; do
+  if [ "$end_opts" = "true" ]; then files+=("$arg"); continue; fi
+  case "$arg" in
+    --dry-run)   dry_run=true ;;
+    --no-backup) backup=false ;;
+    --quiet|-q)  quiet=true ;;
+    -h|--help)   usage ;;
+    --)          end_opts=true ;;
+    -*)          echo "$(basename "$0"): unknown option '$arg'" >&2; usage ;;
+    *)           files+=("$arg") ;;
+  esac
+done
+[ ${#files[@]} -eq 0 ] && usage
+
+say() { [ "$quiet" = "true" ] || printf '%s\n' "$1"; }
+
+title_re='^[[:space:]]*\{"type":"title"'
+session_re='^[[:space:]]*\{"type":"session"'
+
+rc=0
+n_conv=0; n_ok=0; n_bad=0
+for f in "${files[@]}"; do
+  if [ ! -f "$f" ] || [ ! -r "$f" ]; then
+    echo "error: $f: not a readable file" >&2; rc=1; n_bad=$((n_bad+1)); continue
+  fi
+  line1="" line2=""
+  { IFS= read -r line1 || true; IFS= read -r line2 || true; } < "$f"
+  if ! [[ "$line1" =~ $title_re ]]; then
+    say "ok: $f (not an omp session)"; n_ok=$((n_ok+1)); continue
+  fi
+  if ! [[ "$line2" =~ $session_re ]]; then
+    echo "error: $f: omp title line not followed by a session header; refusing" >&2
+    rc=1; n_bad=$((n_bad+1)); continue
+  fi
+  if [ "$dry_run" = "true" ]; then
+    say "would convert: $f"; n_conv=$((n_conv+1)); continue
+  fi
+  if [ "$backup" = "true" ] && [ ! -e "$f.omp.bak" ]; then
+    if ! cp -p -- "$f" "$f.omp.bak"; then
+      echo "error: $f: backup failed; not converting" >&2; rc=1; n_bad=$((n_bad+1)); continue
+    fi
+  fi
+  tmp="$(mktemp "$(dirname -- "$f")/.$(basename -- "$f").XXXXXX")" || {
+    echo "error: $f: cannot create temp file" >&2; rc=1; n_bad=$((n_bad+1)); continue; }
+  if tail -n +2 -- "$f" > "$tmp" && chmod --reference="$f" "$tmp" && mv -f -- "$tmp" "$f"; then
+    say "converted: $f"; n_conv=$((n_conv+1))
+  else
+    rm -f -- "$tmp"
+    echo "error: $f: conversion failed; original left in place" >&2; rc=1; n_bad=$((n_bad+1))
+  fi
+done
+
+if [ ${#files[@]} -gt 1 ]; then
+  verb="converted"; [ "$dry_run" = "true" ] && verb="would convert"
+  say "$verb=$n_conv ok=$n_ok failed=$n_bad"
+fi
+exit $rc

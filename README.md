@@ -110,6 +110,19 @@ Notes and caveats:
 - Setting `HINDSIGHT_BANK_ID` directly in an agent's env also works, but without the wrapper's scoping override it keeps the per-directory prefix behavior — prefer `LWD_HINDSIGHT_BANK_ID`.
 - Bank ids are auto-created on first retain and cannot be renamed, so a typo quietly leaves an empty bank behind.
 
+### Switching an agent from omp to vanilla pi
+
+omp and vanilla pi share almost the same session file format. The one difference is that omp writes a `{"type":"title",...}` line before the session header, and vanilla pi rejects any file that doesn't start with the header. So after an agent moves from `LWD_PI_VARIANT=omp` to `pi`, every resumed issue used to fail at startup with `pi exited with error: exit status 1` (multica's daemon log shows `Session file is not a valid pi session`).
+
+The `pi` wrapper now handles this. On the vanilla pi variant, if the `--session` file starts with omp's title line, it runs `omp-session-to-pi` on that file before launching, and logs the result to `logs/pi.log`. The original is kept as `<file>.omp.bak`. To convert every old session at once:
+
+```bash
+./omp-session-to-pi --dry-run ~/.multica/pi-sessions/*.jsonl   # preview
+./omp-session-to-pi --quiet   ~/.multica/pi-sessions/*.jsonl   # convert (writes .omp.bak backups)
+```
+
+Agents still running omp keep creating title-first files, so the automatic conversion in the wrapper stays in place even after a batch run.
+
 ## Routing claude through a different provider
 
 Set `LWD_PROVIDER=<name>` and the `claude` wrapper sources `claude-providers/<name>.sh` before exec'ing the CLI. The provider file is just a bash file that exports `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, model defaults, etc. — claude itself does the rest.

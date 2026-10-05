@@ -363,11 +363,21 @@ new_args=()
 skip_next=false
 has_model=false
 has_thinking=false
+session_file=""
+session_next=false
 for arg in "$@"; do
   if [ "$skip_next" = "true" ]; then
     working_dir="$arg"
     skip_next=false
     continue
+  fi
+  if [ "$session_next" = "true" ]; then
+    session_file="$arg"
+    session_next=false
+  elif [ "$arg" = "--session" ]; then
+    session_next=true
+  elif [ "${arg%%=*}" = "--session" ]; then
+    session_file="${arg#*=}"
   fi
   if [ "$arg" = "--working-directory" ]; then
     skip_next=true
@@ -382,6 +392,30 @@ for arg in "$@"; do
   new_args+=("$arg")
 done
 set -- "${new_args[@]}"
+
+# --- omp -> pi session conversion (vanilla pi only) ---------------------------
+# Sessions started under omp begin with a `{"type":"title",...}` line; vanilla
+# pi rejects any file whose first entry isn't the session header ("Session file
+# is not a valid pi session", exit 1 at startup). multica can't know the
+# harness changed — it sees provider=pi either way — so an agent switched from
+# omp to pi crashes on every resumed issue. Checked here before launch (a
+# builtin read of the first bytes, no fork) rather than retrying after a
+# failure: the prompt arrives on stdin and can't be replayed, and exec must stay
+# exec. Must run before the cd below: a relative --session path is relative to
+# the workspace. Fail-open: a failed conversion is logged and pi runs anyway
+# (it will then fail exactly as it would have without this block).
+if [ "$_pi_variant" = "pi" ] && [ -n "$session_file" ] && [ -f "$session_file" ]; then
+  _sess_head=""
+  IFS= read -r -n 16 _sess_head < "$session_file" 2>/dev/null || true
+  if [ "$_sess_head" = '{"type":"title",' ]; then
+    if _sess_out="$("$SCRIPT_DIR/omp-session-to-pi" -- "$session_file" 2>&1)"; then
+      _pi_log "omp session converted for vanilla pi: $_sess_out (backup: $session_file.omp.bak)"
+    else
+      _pi_log "WARNING: omp session conversion failed, launching anyway: $_sess_out"
+    fi
+  fi
+  unset _sess_head _sess_out
+fi
 
 # Fall back to the env var when the flag isn't provided
 if [ -z "$working_dir" ] && [ ! -z "$LOCAL_WORKING_PATH" ]; then

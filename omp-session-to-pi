@@ -73,7 +73,10 @@ for f in "${files[@]}"; do
   fi
   tmp="$(mktemp "$(dirname -- "$f")/.$(basename -- "$f").XXXXXX")" || {
     echo "error: $f: cannot create temp file" >&2; rc=1; n_bad=$((n_bad+1)); continue; }
-  if tail -n +2 -- "$f" > "$tmp" && chmod --reference="$f" "$tmp" && mv -f -- "$tmp" "$f"; then
+  # cp -p first so tmp carries the original's mode (mktemp makes it 0600);
+  # the > truncation then keeps that mode. Not chmod --reference: GNU-only,
+  # BSD/macOS chmod rejects it.
+  if cp -p -- "$f" "$tmp" && tail -n +2 -- "$f" > "$tmp" && mv -f -- "$tmp" "$f"; then
     say "converted: $f"; n_conv=$((n_conv+1))
   else
     rm -f -- "$tmp"

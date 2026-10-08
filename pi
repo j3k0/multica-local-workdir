@@ -473,6 +473,16 @@ fi
 # active model/reasoning on top of the overlay's roles.
 [ -n "$_pi_overlay" ] && set -- --config "$_pi_overlay" "$@"
 
+# Workspace skills (vanilla pi): multica writes the agent's skills into
+# $WORKSPACE_DIR/.pi/skills. pi gates project .pi/skills behind project trust,
+# which non-interactive (-p/json/rpc) runs resolve to "skip" — and after the cd
+# above they aren't in CWD anyway. A CLI --skill bypasses both. No double-load:
+# pi dedupes by realpath when the same dir is also discovered (trusted CWD).
+# omp has no --skill flag.
+if [ "$_pi_variant" = "pi" ] && [ -d "$WORKSPACE_DIR/.pi/skills" ]; then
+  set -- --skill "$WORKSPACE_DIR/.pi/skills" "$@"
+fi
+
 # Set the thinking level when LWD_EFFORT is set and the caller didn't already
 # pass --thinking. LWD_EFFORT is the pi-side analog of the claude wrapper's
 # effort knob; it maps to pi/omp's `--thinking` flag.

@@ -266,9 +266,10 @@ case "${LWD_TASK_SETTINGS:-1}" in
               # effort maps to pi/omp `--thinking`, whose levels are
               # minimal/low/medium/high/xhigh. `max` is claude-only (pi has no
               # max; xhigh is the top), so a task carrying `effort: max` is
-              # dropped here with a log line rather than passed to pi.
+              # mapped to xhigh here with a log line rather than passed as-is.
               if [ -n "$task_effort" ]; then
                 case "$task_effort" in
+                  max) _ts_log "mapping effort 'max' to xhigh (pi top level)"; task_effort=xhigh ;;
                   minimal|low|medium|high|xhigh) ;;
                   *) _ts_log "ignoring invalid effort '$task_effort' (not a pi/omp thinking level)"; task_effort="" ;;
                 esac
@@ -341,14 +342,20 @@ fi
 [ -n "$task_effort" ] && LWD_EFFORT="$task_effort"
 
 # Validate LWD_EFFORT against the levels pi/omp `--thinking` accepts (the
-# intersection of omp's and pi's thinking levels). Fail loud on a typo rather
-# than letting pi reject the flag mid-session (same philosophy as the loud
-# failure on an unknown LWD_PROVIDER).
+# intersection of omp's and pi's thinking levels). `max` is claude-only (xhigh
+# is pi's top level), so map it to xhigh with a log line — same treatment as a
+# task `effort: max` label. Any other unknown value fails loud rather than
+# letting pi reject the flag mid-session (same philosophy as the loud failure
+# on an unknown LWD_PROVIDER).
 if [ -n "$LWD_EFFORT" ]; then
   case "$LWD_EFFORT" in
+    max)
+      _pi_log "mapping LWD_EFFORT=max to xhigh (pi top level)"
+      LWD_EFFORT=xhigh
+      ;;
     minimal|low|medium|high|xhigh) ;;
     *)
-      echo "pi wrapper: LWD_EFFORT='$LWD_EFFORT' invalid (expected: minimal, low, medium, high, xhigh)" >&2
+      echo "pi wrapper: LWD_EFFORT='$LWD_EFFORT' invalid (expected: minimal, low, medium, high, xhigh, max)" >&2
       exit 1
       ;;
   esac

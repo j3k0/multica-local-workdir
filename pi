@@ -30,6 +30,13 @@ _lwd_effort_override="$LWD_EFFORT"
 _lwd_hindsight_bank_override="$LWD_HINDSIGHT_BANK_ID"
 _lwd_hindsight_scoping_override="$LWD_HINDSIGHT_SCOPING"
 _lwd_hindsight_retain_override="$LWD_HINDSIGHT_RETAIN_EVERY_N_TURNS"
+# LiteLLM gateway key. Not an LWD_ knob (the litellm extension reads
+# $LITELLM_PI_KEY directly), but it needs the same ambient-beats-.env treatment:
+# a host whose .env pins the shared host key would otherwise clobber the
+# per-agent virtual key multica sets on the agent (the whole point of per-agent
+# keys is per-agent gateway attribution). Captured before .env is sourced and
+# re-applied after, so ambient (per-agent) wins and .env stays the fallback.
+_litellm_pi_key_override="${LITELLM_PI_KEY:-}"
 
 # Source optional .env file (e.g. OMP_BIN / PI_BIN / LWD_PI_VARIANT)
 if [ -f "$SCRIPT_DIR/.env" ]; then
@@ -45,6 +52,8 @@ fi
 [ -n "$_lwd_hindsight_bank_override" ] && LWD_HINDSIGHT_BANK_ID="$_lwd_hindsight_bank_override"
 [ -n "$_lwd_hindsight_scoping_override" ] && LWD_HINDSIGHT_SCOPING="$_lwd_hindsight_scoping_override"
 [ -n "$_lwd_hindsight_retain_override" ] && LWD_HINDSIGHT_RETAIN_EVERY_N_TURNS="$_lwd_hindsight_retain_override"
+[ -n "$_litellm_pi_key_override" ] && export LITELLM_PI_KEY="$_litellm_pi_key_override"
+[ -n "$_litellm_pi_key_override" ] && _pi_log "litellm: using per-agent LITELLM_PI_KEY (ambient env over .env)"
 # Resolve the effective provider: LWD_PI_PROVIDER (wrapper-specific) wins over
 # LWD_PROVIDER (generic fallback); ambient (per-agent) wins over .env. Each
 # layer picks the specific var when set, and the ambient layer as a whole beats
@@ -54,7 +63,7 @@ _eff_provider="${LWD_PI_PROVIDER:-${LWD_PROVIDER}}"
 _amb_provider="${_lwd_pi_provider_override:-${_lwd_provider_override}}"
 [ -n "$_amb_provider" ] && _eff_provider="$_amb_provider"
 LWD_PROVIDER="$_eff_provider"
-unset _lwd_pi_variant_override _lwd_provider_override _lwd_pi_provider_override _lwd_model_override _lwd_effort_override _eff_provider _amb_provider
+unset _lwd_pi_variant_override _lwd_provider_override _lwd_pi_provider_override _lwd_model_override _lwd_effort_override _litellm_pi_key_override _eff_provider _amb_provider
 
 # --- Hindsight memory bank (omp) ---------------------------------------------
 # Per-agent memory bank. omp reads HINDSIGHT_BANK_ID / HINDSIGHT_SCOPING /

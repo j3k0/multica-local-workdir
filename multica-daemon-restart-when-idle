@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""Restart the local multica daemon after it has been idle for a while.
+
+Loop (every --interval seconds, default 15):
+  1. (once at startup) read this machine's runtime IDs from
+     `./multica-daemon status --output json` — kept in a variable, not
+     re-fetched on every loop.
+  2. `multica agent list --output json` and look for agents that
+       - are bound to one of this machine's runtimes (agent.runtime_id),
+       - and are doing work: status working / running / pending.
+     Any such agent counts as busy and resets the idle counter.
+  3. After --idle-checks consecutive idle checks (default 4 ~ 1 minute),
+     run `./multica-daemon restart` and exit.
+
+Fail-safe: a check only counts as idle when we positively know that no
+work is in flight. A failed or timed-out `multica agent list` call and an
+unrecognized agent status are counted as busy, so the daemon is only ever
+restarted in a state we understand.
+
+Agent status buckets (edit the constants below if multica grows new ones):
+  busy: working, running, pending
+  safe: idle, error, stopped, disabled, archived, ""
+"error"/"stopped" are deliberately safe: a dead or disconnected daemon
+leaves its agents on the server in exactly those states, and treating them
+as busy would make it impossible to revive a dead daemon.
+
+Usage:
+  ./multica-daemon-restart-when-idle [--interval 15] [--idle-checks 4]
+      [--runtime-id <uuid>]... [--once] [--dry-run]
+
+  --interval SECONDS   seconds between checks (default 15)
+  --idle-checks N      consecutive idle checks before restarting (default 4)
+  --runtime-id ID      use these runtime IDs instead of asking the daemon
+                       (repeatable; also works when the daemon is down)
+  --once               run a single check and report instead of looping
+  --dry-run            never actually restart, just say it would
+
+Exit codes: 0 = restarted / idle-safe / --once idle · 1 = busy (--once) ·
+2 = could not determine machine runtimes, or the restart failed.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+DAEMON = SCRIPT_DIR / "multica-daemon"
+CALL_TIMEOUT = 30        # seconds per CLI call
+RESTART_TIMEOUT = 120    # seconds for the restart itself
+
+BUSY_STATUSES = {"working", "running", "pending"}
+SAFE_STATUSES = {"idle", "error", "stopped", "disabled", "archived", ""}
+
+
+def log(msg):
+    print(f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}", flush=True)
+
+
+def multica_bin():
+    return [os.environ.get("MULTICA_BIN") or "multica"]
+
+
+def daemon_runtime_ids():
+    """Runtime IDs registered by the local daemon (from `./multica-daemon status`)."""
+    r = subprocess.run(
+        [str(DAEMON), "status", "--output", "json"],
+        capture_output=True, text=True, timeout=CALL_TIMEOUT,
+    )
+    if r.returncode != 0:
+        tail = ((r.stderr or "") + (r.stdout or "")).strip().replace("\n", " ")[:300]
+        raise RuntimeError(f"`./multica-daemon status` exited {r.returncode}: {tail}")
+    data = json.loads(r.stdout)
+    ids = set()
+    for ws in data.get("workspaces") or []:
+        ids.update(ws.get("runtimes") or [])
+    if data.get("runtime_id"):
+        ids.add(data["runtime_id"])
+    if not ids:
+        raise RuntimeError("daemon status listed no runtime IDs")
+    return ids
+
+
+def check_busy(runtime_ids):
+    """One agent-list pass. Returns (busy: bool, detail: str)."""
+    try:
+        r = subprocess.run(
+            multica_bin() + ["agent", "list", "--output", "json"],
+            capture_output=True, text=True, timeout=CALL_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return True, f"`multica agent list` timed out after {CALL_TIMEOUT}s — counted busy"
+    except OSError as e:
+        return True, f"could not run `multica agent list`: {e} — counted busy"
+    if r.returncode != 0:
+        tail = ((r.stderr or "") + (r.stdout or "")).strip().replace("\n", " ")[:300]
+        return True, f"`multica agent list` exited {r.returncode}: {tail} — counted busy"
+    try:
+        agents = json.loads(r.stdout)
+    except ValueError as e:
+        return True, f"unparsable agent list ({e}) — counted busy"
+    if not isinstance(agents, list):
+        return True, f"unexpected agent list payload ({type(agents).__name__}) — counted busy"
+
+    busy, unknown = [], set()
+    for a in agents:
+        if not isinstance(a, dict) or (a.get("runtime_id") or "") not in runtime_ids:
+            continue  # bound to another machine's runtime, or unbound
+        name = a.get("name") or a.get("id") or "?"
+        status = str(a.get("status") or "").lower()
+        if status in BUSY_STATUSES:
+            busy.append(f"{name} ({status})")
+        elif status not in SAFE_STATUSES:
+            unknown.add(status)
+            busy.append(f"{name} (unknown status {status!r})")
+    detail = ", ".join(sorted(busy)) if busy else ""
+    if unknown:
+        detail += f" — unrecognized statuses treated as busy: {', '.join(sorted(unknown))}"
+    return bool(busy), detail
+
+
+def restart(dry_run):
+    if dry_run:
+        log("dry-run: would run ./multica-daemon restart now")
+        return True
+    log("running ./multica-daemon restart …")
+    try:
+        r = subprocess.run(
+            [str(DAEMON), "restart"],
+            capture_output=True, text=True, timeout=RESTART_TIMEOUT,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        log(f"ERROR: restart failed: {e}")
+        return False
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    if out:
+        log("restart output:\n  " + out.replace("\n", "\n  "))
+    if r.returncode != 0:
+        log(f"ERROR: ./multica-daemon restart exited {r.returncode}")
+        return False
+    log("daemon restarted")
+    return True
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Restart ./multica-daemon once no working agents on this "
+                    "machine's runtimes have been seen for a while.")
+    ap.add_argument("--interval", type=float, default=15.0,
+                    help="seconds between checks (default 15)")
+    ap.add_argument("--idle-checks", type=int, default=4,
+                    help="consecutive idle checks before restart (default 4)")
+    ap.add_argument("--runtime-id", action="append", default=[],
+                    help="machine runtime ID to watch (repeatable; overrides "
+                         "the ./multica-daemon status lookup)")
+    ap.add_argument("--once", action="store_true",
+                    help="single check instead of a loop (exit 0 idle, 1 busy)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="log the restart instead of performing it")
+    args = ap.parse_args()
+
+    if args.runtime_id:
+        runtime_ids = set(args.runtime_id)
+        log(f"using supplied runtime IDs (--runtime-id): {len(runtime_ids)}")
+    else:
+        try:
+            runtime_ids = daemon_runtime_ids()
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as e:
+            log(f"ERROR: cannot determine this machine's runtimes: {e}")
+            log("The daemon must be running to fetch its runtime IDs; "
+                "start it first, or pass --runtime-id explicitly.")
+            return 2
+    log(f"watching {len(runtime_ids)} runtime(s) on this machine: "
+        f"{', '.join(sorted(runtime_ids))}")
+
+    try:
+        return watch(runtime_ids, args)
+    except KeyboardInterrupt:
+        print()  # newline after any partial log line
+        log("interrupted")
+        return 130
+
+
+def watch(runtime_ids, args):
+    idle_streak = 0
+    while True:
+        started = time.monotonic()
+        busy, detail = check_busy(runtime_ids)
+        if busy:
+            log(f"busy: {detail}")
+            idle_streak = 0
+        else:
+            idle_streak += 1
+            log(f"no working agents on this machine ({idle_streak}/{args.idle_checks})")
+            if idle_streak >= args.idle_checks:
+                log(f"idle for {idle_streak} consecutive checks — restarting daemon")
+                if not restart(args.dry_run):
+                    return 2
+                return 0
+        if args.once:
+            return 0 if not busy else 1
+        remainder = args.interval - (time.monotonic() - started)
+        if remainder > 0:
+            time.sleep(remainder)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -152,3 +152,15 @@ Unknown provider names fail loud rather than silently falling back to Anthropic 
 ```
 
 An unknown provider fails loud and lists the valid names. Per-agent overrides in multica still win over whatever this writes to `.env`.
+
+## Restart the daemon when idle
+
+`./multica-daemon-restart-when-idle` restarts the daemon once no agent has been working on this machine's runtimes for a while — for the cases where the daemon is up but stops picking up tasks while nothing is in flight.
+
+```bash
+nohup ./multica-daemon-restart-when-idle >> logs/daemon-idle-watch.log 2>&1 &
+```
+
+It fetches this machine's runtime IDs once at startup from `./multica-daemon status --output json` (the daemon must be reachable for that one call, unless you pass `--runtime-id`), then every 15 seconds lists agents with `multica agent list --output json` and checks only those bound to one of these runtimes. Any agent whose status is `working` / `running` / `pending` counts as busy and resets the idle counter; after 4 consecutive idle checks (about a minute) it runs `./multica-daemon restart` and exits — rerun it to keep watching. Failed agent-list calls and unrecognized statuses count as busy, so the daemon is only restarted in a state the script understands.
+
+Tuning: `--interval SECONDS`, `--idle-checks N`, `--runtime-id ID` (repeatable override), `--once` (single check, exit 0 when idle / 1 when busy), `--dry-run` (say it would restart instead of restarting).

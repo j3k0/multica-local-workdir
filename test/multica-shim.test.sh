@@ -91,11 +91,14 @@ FAKE|agent|issue status <uuid> done" done
 grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*\|agent\|issue status' "$LOG" && ok "log line format" || fail "log head" "$(head -1 "$LOG")"
 
 # --- probe: value-taking flags accepted BEFORE a subcommand -----------------
-# Root --help under-enumerates these; brute-force each candidate against the
-# real CLI (needs network + auth) and require every accepted one to be in the
-# shim's skip list — and gated commands to still be caught behind each.
-_flags='--workspace-id --profile --server-url --output --server --output=json --debug --version'
-for f in --profile --output --server-url --workspace-id --server; do
+# Discovery: collect every value-taking flag ("--x string") the CLI advertises
+# at root and on the gated subcommands, try each BEFORE the subcommand against
+# the real CLI (needs network + auth), and require every accepted one to be in
+# the shim's skip list — and gated commands to still be caught behind each.
+_cands=$( { multica --help; multica issue status --help; multica issue comment add --help; } 2>&1 \
+  | grep -oE -- '--[a-z][a-z-]+ string' | cut -d' ' -f1 | sort -u)
+[ -n "$_cands" ] && ok "probe discovered $(echo $_cands | wc -w) candidate flags" || fail "probe found no candidate flags"
+for f in $_cands; do
   err=$(multica "$f" dummy issue get FOV-2096 2>&1); rc=$?
   # "accepted" = the CLI parsed the flag (the id/workspace may still fail)
   if ! echo "$err" | grep -qi 'unknown flag\|flag provided but not defined\|unknown shorthand'; then

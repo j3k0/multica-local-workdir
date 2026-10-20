@@ -101,6 +101,17 @@ if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${#_tokens[@]}" -gt 0 ]; then
       printf '%s|agent|' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       printf '%q ' "$@"
     } | cut -c 1-2000 >> "$LOG_FILE" 2>/dev/null || true
+    # Step 3 (FOV-2097): hand the command to the gate. The gate carries the
+    # real binary and log path via env so argv stays untouched; it execs the
+    # real CLI itself (possibly with adjusted argv for the new handoff flags).
+    # Fail-open: no gate script or python3 -> log above + passthrough.
+    if [ -f "$SCRIPT_DIR/multica-gate.py" ] && command -v python3 >/dev/null 2>&1; then
+      MULTICA_REAL_BIN="$real_bin" \
+      LWD_GATE_LOG="$LOG_FILE" \
+      LWD_GATE_MODE="${LWD_GATE_MODE:-warn}" \
+        exec python3 "$SCRIPT_DIR/multica-gate.py" "$@"
+    fi
+    printf 'bin/multica: warning: gate unavailable (multica-gate.py/python3 missing); passing through\n' >&2 || true
   fi
 fi
 

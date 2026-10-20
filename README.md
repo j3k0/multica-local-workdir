@@ -25,10 +25,12 @@ cp .env.example .env   # then edit — set MULTICA_SERVER_URL
 
 FOV-2094: the claude/pi/omp/opencode wrappers prepend this repo's `bin/` to
 PATH and export `LWD_AGENT_RUN=1`, so inside an agent run a bare `multica`
-resolves to [bin/multica](bin/multica) — a shim in front of the real CLI. Until
-the gates land it is a pure passthrough: argv, stdin, stdout, stderr and exit
-code are the real CLI's, plus a log of agent invocations of mutating issue
-commands (`logs/multica-shim.log`). The marker (not the PATH) is what tells the
+resolves to [bin/multica](bin/multica) — a shim in front of the real CLI. Inside
+an agent run, mutating issue commands (`comment add`, `status`, `assign`,
+`update`, `create`) additionally run through the gate, [bin/multica-gate.py](bin/multica-gate.py)
+(FOV-2094 step 3), which logs the call to `logs/multica-shim.log` and applies
+the handoff policy below. Everything else passes through byte-identical: argv,
+stdin, stdout, stderr and exit code are the real CLI's. The marker (not the PATH) is what tells the
 shim an agent is running: `multica-daemon` and JC's shell get neither the PATH
 prefix nor the marker, so their `multica` is always the real, ungated CLI.
 Don't unset the marker inside agent environments; the wrappers re-assert PATH
@@ -39,6 +41,55 @@ silently repaired). Two caveats: `bin/multica` reads
 an env loader; get `MULTICA_SERVER_URL` etc. from the daemon's `.env`. And the
 shim is a mistake-catcher, not a security boundary (see the FOV-2096 spike:
 agents hold a live `MULTICA_TOKEN` and can run the real CLI by absolute path).
+
+### Handoff gate (`bin/multica-gate.py`, FOV-2097)
+
+Modes via `LWD_GATE_MODE` (default `warn`): warn prints advice and lets
+plain commands through; `enforce` refuses policy-breaking plain commands
+(exit 3). Read commands are never gated, and unreadable issue data fails open
+(checks skip, logged). If the gate itself crashes, the raw command runs.
+
+New flags, always translated (the real CLI doesn't know them — malformed use
+is refused in both modes; on gated commands argv may also be normalised
+`--f=x` → `--f x`):
+
+- `comment add --next <agent>` — the comment declares the next actor. The shim
+  injects a real `mention://agent/<id>` link to the first line if the body
+  has none (a prose name does not count), and refuses when the body mentions
+  any other agent. Ownership is set BEFORE the post (assign `--no-start` +
+  mention = exactly one run, seeing the right assignee/status); status is set
+  to `in_progress`.
+- `--next-human <name>` — post the comment, `assign --no-start` the human,
+  then `in_review` — or `blocked` when combined with `--waiting-on "<what,
+  until when>"` (which also sets the `waiting_on` metadata key).
+- `--no-next-actor` — appends the literal line `No next actor.`; only valid
+  when the issue is already finished (in_review/done/released/cancelled).
+- `--progress` — a mid-run note; mentions nobody. Refused if the body carries
+  a mention (a mention dispatches a paid run).
+- `issue status <id> blocked --waiting-on "..."` — sets `waiting_on`
+  metadata first, then strips the shim flag and calls the CLI.
+
+Policy on plain commands:
+
+- `issue status done` — refused in enforce with "closing is a human's call";
+  hand off via `comment add --next-human`. Warned in warn mode (counted,
+  switched off after the canary).
+- `issue status todo` on an assigned issue — refused (it dispatches
+  the assignee now, with no comment); `blocked` requires `--waiting-on`;
+  `in_review` requires a human assignee.
+- raw `issue assign` / `issue update --assignee*` — refused: assignment alone
+  starts a run with no comment; use `comment add --next`.
+- `issue create --status done|blocked|in_review` — refused (create it, then
+  set the status the right way).
+- Forbidden-to-dispatch agents (`Integrity`, `Librarian`, the three APMs;
+  override with `LWD_GATE_FORBIDDEN`) can neither be `--next`-ed/mentioned as
+  the next actor, nor dispatch agents themselves.
+- Handing back to the agent who wrote the latest comment is noted as a paid
+  loop (advisory — “without new information” is a judgment call; the inbox
+  safety net still owns undeclared run endings).
+
+Tests: `test/multica-shim.test.sh` (passthrough, resolution, marker, log,
+flag probe) and `test/multica-gate.test.sh` (gate branches, fake CLI).
 
 ## Telling the wrapper which project to use
 

@@ -4,6 +4,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(pwd)"
 
+# Agent runs resolve `multica` through this repo's shim (bin/multica) and carry
+# a marker saying so; see bin/multica. multica-daemon and JC's shell get neither.
+PATH="$SCRIPT_DIR/bin:$PATH"
+export LWD_AGENT_RUN=1
+
 # Source optional .env file (e.g. OPENCODE_BIN overrides)
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -a

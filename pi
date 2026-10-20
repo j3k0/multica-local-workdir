@@ -4,6 +4,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(pwd)"
 
+# Agent runs resolve `multica` through this repo's shim (bin/multica) and carry
+# a marker saying so; see bin/multica. multica-daemon and JC's shell get neither.
+PATH="$SCRIPT_DIR/bin:$PATH"
+export LWD_AGENT_RUN=1
+
 # Log each invocation to ${LOG_DIR:-$SCRIPT_DIR/logs}/pi.log.
 # Best-effort: never let logging failures abort the wrapper.
 _log_dir="${LOG_DIR:-$SCRIPT_DIR/logs}"
@@ -186,7 +191,7 @@ case "${LWD_TASK_SETTINGS:-1}" in
       if [ -z "$_ts_issue" ]; then
         _ts_log "no issue id in $_ts_ctx; skipping"
       else
-        _ts_json="$("${MULTICA_BIN:-multica}" issue get "$_ts_issue" --output json 2>/dev/null || true)"
+        _ts_json="$("$SCRIPT_DIR/bin/multica" issue get "$_ts_issue" --output json 2>/dev/null || true)"
         if ! printf '%s' "$_ts_json" | jq -e '.id // empty' >/dev/null 2>&1; then
           _ts_log "could not read issue $_ts_issue; skipping"
         else
@@ -235,7 +240,7 @@ case "${LWD_TASK_SETTINGS:-1}" in
               # remains. Keeps us working if multica changes the line format.
               _ts_n=0
               for _id in $(grep -oE "$_uuid_re" "$_ts_ctx" 2>/dev/null | sort -u || true); do
-                if "${MULTICA_BIN:-multica}" agent get "$_id" --output json 2>/dev/null \
+                if "$SCRIPT_DIR/bin/multica" agent get "$_id" --output json 2>/dev/null \
                      | jq -e '.id // empty' >/dev/null 2>&1; then
                   _ts_agent="$_id"; _ts_n=$((_ts_n + 1))
                 fi
@@ -259,7 +264,7 @@ case "${LWD_TASK_SETTINGS:-1}" in
             elif [ "$_ts_atype" = "agent" ] && [ -n "$_ts_aid" ] && [ "$_ts_aid" = "$_ts_agent" ]; then
               _ts_apply=true
             elif [ "$_ts_atype" = "squad" ] && [ -n "$_ts_aid" ]; then
-              _ts_leader="$("${MULTICA_BIN:-multica}" squad get "$_ts_aid" --output json 2>/dev/null | jq -r '.leader_id // empty' 2>/dev/null || true)"
+              _ts_leader="$("$SCRIPT_DIR/bin/multica" squad get "$_ts_aid" --output json 2>/dev/null | jq -r '.leader_id // empty' 2>/dev/null || true)"
               if [ -n "$_ts_leader" ] && [ "$_ts_leader" = "$_ts_agent" ]; then
                 _ts_apply=true
               else

@@ -1,0 +1,78 @@
+#!/bin/bash
+set -e
+
+# bin/multica — shim in front of the real multica CLI, for AGENT runs only
+# (step 2 of 8 in FOV-2094).
+
+# The agent wrappers (claude, pi/omp, opencode) prepend this directory to PATH
+# and export LWD_AGENT_RUN=1, so a bare `multica` typed by an agent lands here.
+# multica-daemon does NOT get this PATH, and neither does JC's shell — that is
+# what the marker disambiguates: LWD_AGENT_RUN=1 says "an agent is running",
+# and only agent runs get gated behaviour (gates themselves are step 3).
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+LOG_FILE="$REPO_DIR/logs/multica-shim.log"
+
+# ---------------------------------------------------------------- resolve ---
+# Real binary: ambient MULTICA_BIN, then MULTICA_BIN from .env (read in a
+# subshell so nothing else in .env — secrets — leaks into the CLI's env), then
+# PATH, skipping this directory (a bare PATH lookup here would find this shim
+# — recursion).
+real_bin="${MULTICA_BIN:-}"
+if [ -z "$real_bin" ] && [ -f "$REPO_DIR/.env" ]; then
+  real_bin="$(. "$REPO_DIR/.env" >/dev/null 2>&1; printf '%s' "${MULTICA_BIN:-}")"
+fi
+if [ -z "$real_bin" ]; then
+  IFS=: read -r -a _path_dirs <<< "$PATH"
+  for _d in "${_path_dirs[@]}"; do
+    [ -n "$_d" ] && [ -d "$_d" ] || continue
+    [ "$(cd "$_d" && pwd -P)" = "$SCRIPT_DIR" ] && continue
+    if [ -x "$_d/multica" ] && [ ! -d "$_d/multica" ]; then
+      real_bin="$_d/multica"
+      break
+    fi
+  done
+fi
+if [ -z "$real_bin" ] || [ ! -x "$real_bin" ]; then
+  echo "bin/multica: real multica CLI not found (set MULTICA_BIN in $REPO_DIR/.env)" >&2
+  exit 127
+fi
+# Never exec ourselves (MULTICA_BIN pointing back here, or a symlink to us).
+_self="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+_real_dir="$(cd "$(dirname "$real_bin")" && pwd -P)"
+if [ "$_real_dir/$(basename "$real_bin")" = "$_self" ] \
+   || { [ -L "$real_bin" ] && [ "$(readlink -f "$real_bin")" = "$(readlink -f "$_self")" ]; }; then
+  echo "bin/multica: MULTICA_BIN ($real_bin) points at this shim; set it to the real multica CLI" >&2
+  exit 127
+fi
+
+# ------------------------------------------------------------- gate frame ---
+# Step 2: agent-run detection + a log of gated invocations; the actual gates
+# replace the logging below in step 3. Commands recognised as gated are logged
+# but still passed through. With no marker set, this whole block is skipped —
+# byte-identical passthrough, no logging.
+if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "$#" -gt 0 ]; then
+  cmd="$1"
+  sub="${2:-}"
+  gated=false
+  # Mutating issue commands only; read commands (issue get/list, …) pass free.
+  case "$cmd" in
+    issue)
+      case "$sub" in
+        status|update|assign|create) gated=true ;;
+        comment) [ "${3:-}" = "add" ] && gated=true ;;
+      esac
+      ;;
+  esac
+  if [ "$gated" = "true" ]; then
+    # Best effort: a missing log dir or failed append never breaks a run.
+    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+    printf '%s|agent|%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG_FILE" 2>/dev/null || true
+  fi
+fi
+
+# ------------------------------------------------------------ passthrough ---
+# Everything — including all gated commands until step 3 — is exec'd intact:
+# argv, stdin, stdout, stderr and exit code are the real CLI's.
+exec "$real_bin" "$@"

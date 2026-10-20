@@ -21,6 +21,17 @@ cp .env.example .env   # then edit — set MULTICA_SERVER_URL
 ./multica-daemon
 ```
 
+## The bin/multica shim (agent runs only)
+
+FOV-2094: the claude/pi/omp/opencode wrappers prepend this repo's `bin/` to
+PATH and export `LWD_AGENT_RUN=1`, so inside an agent run a bare `multica`
+resolves to [bin/multica](bin/multica) — a shim in front of the real CLI. Until
+the gates land it is a pure passthrough: argv, stdin, stdout, stderr and exit
+code are the real CLI's, plus a log of agent invocations of mutating issue
+commands (`logs/multica-shim.log`). The marker (not the PATH) is what tells the
+shim an agent is running: `multica-daemon` and JC's shell get neither the PATH
+prefix nor the marker, so their `multica` is always the real, ungated CLI.
+
 ## Telling the wrapper which project to use
 
 Set `LOCAL_WORKING_PATH=/abs/path/to/project` in the environment multica launches agents under. (Alternatively, append `--working-directory <path>` to the agent's extra args in multica's per-agent configuration.)

@@ -27,6 +27,8 @@ printf '[{"id":"%s","name":"FakeAgent"},{"id":"%s","name":"OtherAgent"},{"id":"%
 
 cat > "$T/stub" <<'EOF'
 #!/bin/bash
+# STUB_FAIL: a fixed string; any call whose args contain it is logged and exits 1
+if [ -n "$STUB_FAIL" ] && [[ "$*" == *"$STUB_FAIL"* ]]; then echo "FAILED:$*" >> "$STUB_CALLS"; echo "stub: forced failure" >&2; exit 1; fi
 if [ "$1 $2" = "agent list" ]; then echo "agent list" >> "$STUB_CALLS"; cat "$STUB_AGENTS"; exit 0; fi
 if [ "$1 $2" = "issue get" ]; then echo "$*" >> "$STUB_CALLS"; cat "$STUB_ISSUE"; exit 0; fi
 if [ "$1 $2 $3" = "issue comment list" ]; then echo "$*" >> "$STUB_CALLS"; cat "$STUB_COMMENTS" 2>/dev/null || echo "[]"; exit 0; fi
@@ -42,10 +44,11 @@ export STUB_AGENTS="$T/agents.json" STUB_CALLS="$CALLS" STUB_ISSUE="$T/issue.jso
 export LWD_GATE_CACHE_DIR="$T/cache" MULTICA_WORKSPACE_ID=ws-test
 export MULTICA_AGENT_ID="$FR" MULTICA_AGENT_NAME=RunnerAgent
 
-mkissue() { # status assignee_id|null assignee_type|null
-  local id=null ty=null
+mkissue() { # status assignee_id|null assignee_type|null [waiting_on]
+  local id=null ty=null md='{}'
   [ "$2" != null ] && id="\"$2\""; [ "$3" != null ] && ty="\"$3\""
-  printf '{"id":"I","status":"%s","assignee_id":%s,"assignee_type":%s}\n' "$1" "$id" "$ty" > "$T/issue.json"
+  [ -n "$4" ] && md="{\"waiting_on\":\"$4\"}"
+  printf '{"id":"I","status":"%s","assignee_id":%s,"assignee_type":%s,"metadata":%s}\n' "$1" "$id" "$ty" "$md" > "$T/issue.json"
 }
 # g <mode> args... : run the shim as an agent; sets $out (stderr) and $rc
 g() {
@@ -203,9 +206,10 @@ g enforce issue update I --assignee-id "$FA2"; rc_is 3 "enforce: update --assign
 g enforce issue update I --status=done; rc_is 3 "enforce: update --status=done refused"
 g enforce issue update I --title t --status in_progress; rc_is 0 "update --status in_progress allowed"
 g warn issue update I --next FakeAgent; rc_is 3 "handoff flags on update refused"
-for s in done blocked in_review; do
+for s in done in_review; do
   g enforce issue create --title t --status $s; rc_is 3 "enforce: create --status $s refused"
 done
+g enforce issue create --title t --status blocked --assignee-id "$FA2"; rc_is 3 "enforce: create --status blocked + assignee refused"
 g enforce issue create --title t --status todo --assignee OtherAgent; rc_is 0 "create todo + assignee allowed (delegation)"
 
 # ------------------------------------------------------------------ misc ---
@@ -218,6 +222,68 @@ grep -qE '\|agent\|issue status' "$LOG" && ok "shim log line" || fail "shim log"
 grep -qE '\|gate\|warn\|warn\|issue status I done' "$LOG" && ok "gate decision logged" || fail "gate log" "$(cat "$LOG" 2>&1)"
 out=$(cd "$T" && PATH="/usr/bin:/bin" MULTICA_BIN="$T/stub" LWD_AGENT_RUN=0 "$T/repo/multica" issue status I done 2>&1); rc=$?
 rc_is 0 "non-agent runs: no gate"; [ -z "$out" ] && ok "non-agent: silent" || fail "non-agent silent" "$out"
+
+# ------------------------------------------- review round 1 (FOV-2097) ---
+# side-step failures
+mkissue in_progress "$FA2" agent
+STUB_FAIL="issue assign" g enforce issue comment add I --content hi --next-human Typo
+rc_is 4 "--next-human: failed assign -> exit 4"; says "HANDOFF INCOMPLETE" "--next-human: failed assign reported"
+hasnt "in_review" "--next-human: failed assign -> no status flip"
+STUB_FAIL="issue assign" g enforce issue comment add I --content hi --next FakeAgent
+rc_is 4 "--next: failed assign -> exit 4"; says "ownership stays" "--next: failed assign reported"
+hasnt "issue status" "--next: failed assign -> no status flip"
+has "ARGS:[issue comment add I --content $M1 hi]" "--next: failed assign still posts the mention"
+mkissue in_review "$FA2" agent "JC, until friday"
+STUB_FAIL="comment add" g enforce issue comment add I --content hi --next FakeAgent
+rc_is 1 "--next: failed post returns the CLI's code"; says "HANDOFF DID NOT LAND" "--next: failed post reported"
+has "issue assign I --no-start --to-id $FA2" "--next: failed post rolls the assignee back"
+has "issue status I in_review --no-start" "--next: failed post rolls the status back"
+has "issue metadata set I --key waiting_on --value JC, until friday --type string" "--next: failed post restores waiting_on"
+STUB_FAIL="comment add" g enforce issue comment add I --content hi --next-human JC
+rc_is 1 "--next-human: failed post"; hasnt "issue assign" "--next-human: failed post moves nothing"
+# stale waiting_on
+mkissue blocked "$FA2" agent "JC, until friday"
+g enforce issue comment add I --content resume --next FakeAgent
+has "issue metadata delete I --key waiting_on" "--next clears a stale waiting_on"
+order "issue metadata delete" "ARGS:[issue comment add" "--next: waiting_on cleared before the dispatching post"
+g enforce issue comment add I --content review --next-human JC
+has "issue metadata delete I --key waiting_on" "--next-human (no --waiting-on) clears waiting_on"
+mkissue in_progress "$FA2" agent
+g enforce issue comment add I --content go --next FakeAgent
+hasnt "metadata delete" "no waiting_on -> no delete call"
+# closed issues
+for s in done released cancelled; do
+  mkissue $s "$FA2" agent
+  g warn issue comment add I --content hi --next FakeAgent; rc_is 3 "--next on a $s issue refused"
+  g warn issue comment add I --content hi --next-human JC;  rc_is 3 "--next-human on a $s issue refused"
+done
+hasnt ARGS "closed-issue refusals post nothing"
+mkissue done m-1 member
+g enforce issue comment add I --content "closed on your approval" --no-next-actor
+rc_is 0 "--no-next-actor on a done issue still fine"
+# --x=y inside a value
+mkissue in_progress "$FA2" agent
+g enforce issue comment add I --content "--output=json is what the shim needs" --next FakeAgent
+rc_is 0 "value starting with --x=y: handoff ok"
+has "ARGS:[issue comment add I --content $M1 --output=json is what the shim needs]" "value starting with --x=y kept intact"
+g enforce issue comment add I --content "--next=FakeAgent in prose"
+rc_is 3 "value that looks like --next=X is not a declaration"
+# agent list failure
+rm -rf "$T/cache"
+STUB_FAIL="agent list" g enforce issue comment add I --content hi --next FakeAgent
+rc_is 3 "agent list failure refuses --next"; says "could not list agents" "agent list failure named as such"
+STUB_FAIL="agent list" g enforce issue comment add I --content hi --next-human JC
+rc_is 0 "agent list failure: --next-human proceeds (fail-open check)"
+# done allowlist
+mkissue in_progress m-1 member
+LWD_GATE_DONE_AGENTS=Secretary MULTICA_AGENT_NAME=Secretary g enforce issue status I done
+rc_is 0 "LWD_GATE_DONE_AGENTS: Secretary may close"; grep -q 'done-allowlisted' "$LOG" && ok "allowlisted close logged" || fail "allowlist log" "$(cat "$LOG")"
+LWD_GATE_DONE_AGENTS=Secretary g enforce issue status I done; rc_is 3 "allowlist is per agent (RunnerAgent still refused)"
+# nits
+g enforce issue assign I --to OtherAgent --no-start; rc_is 0 "assign --no-start passes (starts no run)"
+g enforce issue create --title t --status blocked; rc_is 0 "create blocked without assignee passes"
+mkissue in_progress "$FA2" agent
+g enforce issue status I todo; says "issue status I blocked" "todo advice names the real issue id"
 
 # fail-open: a crashing gate still runs the raw command (stdin body kept)
 sed 's/^def comment_add(argv, toks):$/&\n    raise RuntimeError("boom")/' "$REPO/bin/multica-gate.py" > "$T/repo/multica-gate.py"

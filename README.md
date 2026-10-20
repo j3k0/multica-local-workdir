@@ -46,8 +46,15 @@ agents hold a live `MULTICA_TOKEN` and can run the real CLI by absolute path).
 
 Modes via `LWD_GATE_MODE` (default `warn`): warn prints advice and lets
 plain commands through; `enforce` refuses policy-breaking plain commands
-(exit 3). Read commands are never gated, and unreadable issue data fails open
-(checks skip, logged). If the gate itself crashes, the raw command runs.
+(exit 3). Flip it with `LWD_GATE_MODE=enforce` in `.env` (the wrappers source
+it with `set -a`) or per agent via multica agent env; other knobs are listed
+in `.env.example`. Read commands are never gated, and unreadable issue data
+fails open (checks skip, logged). If the gate itself crashes, the raw command
+runs. Exit 4 = the comment was posted but a handoff side step (assign, status,
+metadata) failed; stderr says what to fix. A failed `--next` post rolls back
+the assign/status/`waiting_on` it already changed. `--next`/`--next-human`
+refuse on a closed issue (done/released/cancelled) and clear a stale
+`waiting_on` (the inbox treats that key as authoritative).
 
 New flags, always translated (the real CLI doesn't know them — malformed use
 is refused in both modes; on gated commands argv may also be normalised
@@ -71,16 +78,18 @@ is refused in both modes; on gated commands argv may also be normalised
 
 Policy on plain commands:
 
-- `issue status done` — refused in enforce with "closing is a human's call";
+- `issue status done` — refused in enforce with "closing is a human's call"
+  (agents in `LWD_GATE_DONE_AGENTS` excepted, logged);
   hand off via `comment add --next-human`. Warned in warn mode (counted,
   switched off after the canary).
 - `issue status todo` on an assigned issue — refused (it dispatches
   the assignee now, with no comment); `blocked` requires `--waiting-on`;
   `in_review` requires a human assignee.
 - raw `issue assign` / `issue update --assignee*` — refused: assignment alone
-  starts a run with no comment; use `comment add --next`.
-- `issue create --status done|blocked|in_review` — refused (create it, then
-  set the status the right way).
+  starts a run with no comment; use `comment add --next` (`--no-start` and
+  `--unassign` pass: neither starts a run).
+- `issue create --status done|in_review`, or `blocked` with an assignee —
+  refused (create it, then set the status the right way).
 - Forbidden-to-dispatch agents (`Integrity`, `Librarian`, the three APMs;
   override with `LWD_GATE_FORBIDDEN`) can neither be `--next`-ed/mentioned as
   the next actor, nor dispatch agents themselves.

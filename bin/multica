@@ -116,6 +116,6 @@ if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${#_tokens[@]}" -gt 0 ]; then
 fi
 
 # ------------------------------------------------------------ passthrough ---
-# Everything — including all gated commands until step 3 — is exec'd intact:
-# argv, stdin, stdout, stderr and exit code are the real CLI's.
+# Everything not handed to the gate above is exec'd intact: argv, stdin,
+# stdout, stderr and exit code are the real CLI's.
 exec "$real_bin" "$@"

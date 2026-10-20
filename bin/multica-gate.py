@@ -44,6 +44,7 @@ CMD_VALUE_FLAGS = GLOBAL_VALUE_FLAGS | NEW_VALUE_FLAGS | {
     "--due-date", "--key", "--value", "--type",
 }
 FINISHED = {"in_review", "done", "released", "cancelled"}
+CLOSED = {"done", "released", "cancelled"}
 MENTION_RE = re.compile(r"mention://agent/([0-9a-fA-F-]{36})")
 NO_NEXT_LINE = "No next actor."
 
@@ -54,8 +55,14 @@ SELF_ID = os.environ.get("MULTICA_AGENT_ID", "")
 SELF_NAME = os.environ.get("MULTICA_AGENT_NAME", "")
 FORBIDDEN = {n.strip().lower() for n in os.environ.get(
     "LWD_GATE_FORBIDDEN", "Integrity,Librarian,IAPDAPM,LODAPM,TRIGAPM").split(",") if n.strip()}
+# Agents allowed to set `done` (e.g. Secretary closing on JC's recorded approve,
+# FOV-2064a). Empty by default; every allowlisted close is logged.
+DONE_AGENTS = {n.strip().lower() for n in os.environ.get("LWD_GATE_DONE_AGENTS", "").split(",") if n.strip()}
 
 DONE_MSG = "closing is a human's call; use: multica issue comment add <id> --next-human <human-name>"
+
+
+SIDE_FAILED = 4  # comment posted, but a handoff side step failed (see stderr)
 
 
 class Refused(Exception):
@@ -114,7 +121,7 @@ def side(argv):
 
 # ------------------------------------------------------------------ lookups --
 def agents(refresh=False):
-    """{id: name}, cached per workspace for 6h."""
+    """{id: name}, cached per workspace for 6h; None when the list can't be read."""
     d = os.environ.get("LWD_GATE_CACHE_DIR") or os.path.expanduser("~/.cache/multica-gate")
     cache = os.path.join(d, f"agents-{os.environ.get('MULTICA_WORKSPACE_ID', 'default')}.json")
     if not refresh:
@@ -128,8 +135,10 @@ def agents(refresh=False):
         p = subprocess.run([REAL, "agent", "list", "--output", "json"],
                            capture_output=True, text=True, timeout=60)
         m = {a["id"]: a["name"] for a in json.loads(p.stdout) if a.get("id") and a.get("name")}
-    except Exception:
-        return {}
+    except Exception as e:
+        say(f"could not list agents ({type(e).__name__})")
+        log("agent-list-failed", ["agent", "list"])
+        return None
     try:
         os.makedirs(d, exist_ok=True)
         with open(cache, "w") as f:
@@ -139,10 +148,16 @@ def agents(refresh=False):
     return m
 
 
-def resolve_agent(name):
-    """(id, name) for an agent name or id, else (None, None). Refreshes once on a miss."""
+def resolve_agent(name, required=True):
+    """(id, name) for an agent name or id, else (None, None). Refreshes once on
+    a miss. A failed agent list refuses when `required` (no id, no mention),
+    otherwise reads as "not an agent" (fail-open)."""
     for refresh in (False, True):
         m = agents(refresh)
+        if m is None:
+            if required:
+                refuse("could not list agents, so the next actor can't be resolved; retry")
+            return None, None
         if name in m:
             return name, m[name]
         for aid, n in m.items():
@@ -299,7 +314,7 @@ def comment_add(argv, toks):
     src, body = read_body(argv, stdin_text)
     mentions = set(MENTION_RE.findall(body))
     self_forbidden = SELF_NAME.lower() in FORBIDDEN
-    amap = agents()
+    amap = agents() or {}
     named = {m: amap.get(m, "").lower() for m in mentions}
 
     if not nf:
@@ -355,21 +370,34 @@ def comment_add(argv, toks):
 
     if kind == "--next-human":
         human = nf["--next-human"][0]
-        if resolve_agent(human)[0]:
+        if resolve_agent(human, required=False)[0]:
             refuse(f"'{human}' is an agent; use --next {human}")
         if mentions:
             refuse("a --next-human handoff must not mention agents (that dispatches a run)")
+        iss = issue(issue_id)
+        refuse_if_closed(iss)
         rc = run(argv, stdin_text)
         log(f"next-human rc={rc}", argv)
-        if rc == 0:
-            side(["issue", "assign", issue_id, "--to", human, "--no-start"])
-            if "--waiting-on" in nf:
-                side(["issue", "metadata", "set", issue_id, "--key", "waiting_on",
-                      "--value", nf["--waiting-on"][0], "--type", "string"])
-                side(["issue", "status", issue_id, "blocked", "--no-start"])
-            else:
-                side(["issue", "status", issue_id, "in_review", "--no-start"])
-        sys.exit(rc)
+        if rc != 0:
+            say("HANDOFF DID NOT LAND: the comment was not posted; assignee and status unchanged")
+            sys.exit(rc)
+        if side(["issue", "assign", issue_id, "--to", human, "--no-start"]) != 0:
+            say(f"HANDOFF INCOMPLETE: comment posted, but assigning '{human}' failed, so the status was "
+                f"NOT changed. Fix: multica issue assign {issue_id} --to <exact human name> --no-start, "
+                f"then the status")
+            log("next-human assign-failed", argv)
+            sys.exit(SIDE_FAILED)
+        if "--waiting-on" in nf:
+            ok_ = side(["issue", "metadata", "set", issue_id, "--key", "waiting_on",
+                        "--value", nf["--waiting-on"][0], "--type", "string"]) == 0
+            ok_ = side(["issue", "status", issue_id, "blocked", "--no-start"]) == 0 and ok_
+        else:
+            ok_ = clear_waiting(issue_id, iss)
+            ok_ = side(["issue", "status", issue_id, "in_review", "--no-start"]) == 0 and ok_
+        if not ok_:
+            say("HANDOFF INCOMPLETE: comment posted and human assigned, but a status/metadata step failed (above)")
+            sys.exit(SIDE_FAILED)
+        sys.exit(0)
 
     # --next <agent>
     name = nf["--next"][0]
@@ -386,26 +414,77 @@ def comment_add(argv, toks):
     if others:
         refuse(f"never mention an agent other than the next actor (found {', '.join(sorted(others))})")
     iss = issue(issue_id)
+    refuse_if_closed(iss)
     warn_loop(issue_id, aid, aname)
     if aid not in mentions:
         link = f"[@{aname}](mention://agent/{aid})"
         body = f"{link} {body}" if src == "content" else (f"{link}\n{body}" if body else link)
         argv, stdin_text = deliver(argv, src or "stdin", body)
     # Ownership and status first, so the run the mention starts sees them
-    # (assign --no-start + mention = exactly one run).
-    if iss is None or iss.get("assignee_id") != aid:
-        side(["issue", "assign", issue_id, "--to-id", aid, "--no-start"])
-    if iss is None or iss.get("status") != "in_progress":
-        side(["issue", "status", issue_id, "in_progress", "--no-start"])
+    # (assign --no-start + mention = exactly one run). Status only moves once
+    # ownership did; a failed post rolls both back.
+    prev_assignee = iss.get("assignee_id") if iss else None
+    prev_status = iss.get("status") if iss else None
+    prev_waiting = waiting_of(iss)
+    assigned = moved = cleared = False
+    owned = iss is not None and prev_assignee == aid
+    if not owned:
+        owned = assigned = side(["issue", "assign", issue_id, "--to-id", aid, "--no-start"]) == 0
+        if not owned:
+            say(f"ownership stays with the previous assignee; status left unchanged. The mention still "
+                f"dispatches {aname}. Fix after: multica issue assign {issue_id} --to-id {aid} --no-start")
+    if owned:
+        if iss is None or prev_status != "in_progress":
+            moved = side(["issue", "status", issue_id, "in_progress", "--no-start"]) == 0
+        cleared = prev_waiting is not None and clear_waiting(issue_id, iss)
     rc = run(argv, stdin_text)
     log(f"next rc={rc}", argv)
-    sys.exit(rc)
+    if rc != 0:
+        say("HANDOFF DID NOT LAND: the comment was not posted and nobody was dispatched; rolling back")
+        if assigned and iss is not None:
+            side(["issue", "assign", issue_id, "--no-start"] +
+                 (["--to-id", prev_assignee] if prev_assignee else ["--unassign"]))
+        if moved and prev_status:
+            side(["issue", "status", issue_id, prev_status, "--no-start"])
+        if cleared:
+            side(["issue", "metadata", "set", issue_id, "--key", "waiting_on",
+                  "--value", str(prev_waiting), "--type", "string"])
+        sys.exit(rc)
+    sys.exit(0 if owned else SIDE_FAILED)
+
+
+def waiting_of(iss):
+    return ((iss or {}).get("metadata") or {}).get("waiting_on")
+
+
+def clear_waiting(issue_id, iss):
+    """A resumed or handed-off issue is no longer parked: drop a stale
+    waiting_on (the inbox treats it as authoritative). True when cleared or
+    nothing to clear; unknown issue data -> try, tolerating "not set"."""
+    if iss is not None and waiting_of(iss) is None:
+        return True
+    p = subprocess.run([REAL, "issue", "metadata", "delete", issue_id, "--key", "waiting_on"],
+                       capture_output=True, text=True)
+    if p.returncode != 0 and iss is not None:
+        say(f"could not clear waiting_on: {p.stderr.strip()[:300]}")
+        return False
+    return True
+
+
+def refuse_if_closed(iss):
+    if iss and iss.get("status") in CLOSED:
+        refuse(f"the issue is {iss.get('status')}; a handoff would reopen it and (for --next) start a "
+               "paid run. Reopen it explicitly first if that is really intended")
 
 
 # ---------------------------------------------------------- status / update --
 def status_problem(key, issue_id, has_waiting):
     """Policy problems for a target status; None when allowed."""
     if key == "done":
+        if SELF_NAME.lower() in DONE_AGENTS:
+            say(f"done allowed for {SELF_NAME} (LWD_GATE_DONE_AGENTS)")
+            log("done-allowlisted", ["issue", "status", issue_id, "done"])
+            return None
         return DONE_MSG.replace("<id>", issue_id)
     if key == "blocked" and not has_waiting:
         return (f'blocked needs --waiting-on: multica issue status {issue_id} blocked '
@@ -416,7 +495,7 @@ def status_problem(key, issue_id, has_waiting):
             return None
         if key == "todo" and iss.get("assignee_id"):
             return ("todo on an assigned issue dispatches the assignee now, with no comment; to park it: "
-                    'multica issue status <id> blocked --waiting-on "<what, until when>"')
+                    f'multica issue status {issue_id} blocked --waiting-on "<what, until when>"')
         if key == "in_review" and iss.get("assignee_type") != "member":
             return (f"in_review needs a human assignee; use: "
                     f"multica issue comment add {issue_id} --next-human <name>")
@@ -470,14 +549,15 @@ def create(argv):
                     'backlog, then: multica issue status <id> blocked --waiting-on "<what, until when>"'),
         "in_review": "create it, then hand off: multica issue comment add <id> --next-human <name>",
     }
-    if key in probs:
+    has_assignee = flag_value(argv, "--assignee") is not None or flag_value(argv, "--assignee-id") is not None
+    if key in probs and (key != "blocked" or has_assignee):
         violation(probs[key], argv)
     log("pass", argv)
     sys.exit(run(argv))
 
 
 def assign(argv, toks):
-    if "--unassign" in argv:
+    if "--unassign" in argv or "--no-start" in argv:  # neither starts a run
         log("pass", argv)
         sys.exit(run(argv))
     issue_id = toks[2] if len(toks) > 2 else "<id>"
@@ -494,12 +574,18 @@ def main():
         MODE = "warn"
     if "-h" in raw or "--help" in raw:
         sys.exit(run(raw))
-    argv = []
-    for a in raw:  # --flag=value -> --flag value, so one walk handles both forms
-        if a.startswith("--") and "=" in a:
+    # --flag=value -> --flag value for KNOWN flags in flag position only, so a
+    # value that merely looks like one (--content "--output=json ...") survives.
+    argv, skip = [], False
+    for a in raw:
+        if skip:
+            argv.append(a)
+            skip = False
+        elif a.startswith("--") and "=" in a and a.split("=", 1)[0] in CMD_VALUE_FLAGS:
             argv.extend(a.split("=", 1))
         else:
             argv.append(a)
+            skip = a in CMD_VALUE_FLAGS
     toks = positionals(argv)
     try:
         if len(toks) >= 4 and toks[:3] == ["issue", "comment", "add"]:

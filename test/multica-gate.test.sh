@@ -219,5 +219,12 @@ grep -qE '\|gate\|warn\|warn\|issue status I done' "$LOG" && ok "gate decision l
 out=$(cd "$T" && PATH="/usr/bin:/bin" MULTICA_BIN="$T/stub" LWD_AGENT_RUN=0 "$T/repo/multica" issue status I done 2>&1); rc=$?
 rc_is 0 "non-agent runs: no gate"; [ -z "$out" ] && ok "non-agent: silent" || fail "non-agent silent" "$out"
 
+# fail-open: a crashing gate still runs the raw command (stdin body kept)
+sed 's/^def comment_add(argv, toks):$/&\n    raise RuntimeError("boom")/' "$REPO/bin/multica-gate.py" > "$T/repo/multica-gate.py"
+g enforce issue comment add I --content hi
+rc_is 0 "gate crash: raw command still runs"; says "internal error" "gate crash: reported"
+has "ARGS:[issue comment add I --content hi]" "gate crash: argv intact"
+cp "$REPO/bin/multica-gate.py" "$T/repo/multica-gate.py"
+
 [ "$fails" -eq 0 ] && echo "ALL PASS" || echo "$fails FAILURES"
 exit "$fails"

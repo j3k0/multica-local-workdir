@@ -62,6 +62,9 @@ class Refused(Exception):
     pass
 
 
+CONSUMED_STDIN = {}
+
+
 def say(msg):
     print(f"bin/multica: gate ({MODE}): {msg}", file=sys.stderr)
 
@@ -290,6 +293,8 @@ def comment_add(argv, toks):
     if issue_id is None:
         sys.exit(run(argv))  # usage error is the real CLI's business
     stdin_text = sys.stdin.read() if "--content-stdin" in argv else None
+    if stdin_text is not None:
+        CONSUMED_STDIN["text"] = stdin_text  # for the fail-open path in main()
     argv, nf = take_new_flags(argv)
     src, body = read_body(argv, stdin_text)
     mentions = set(MENTION_RE.findall(body))
@@ -513,6 +518,10 @@ def main():
         say(f"REFUSED: {e}")
         log("refuse", raw)
         sys.exit(REFUSE)
+    except Exception as e:  # fail-open: a gate bug must never block a run
+        say(f"internal error ({type(e).__name__}: {e}); passing the raw command through")
+        log("gate-error", raw)
+        sys.exit(run(raw, CONSUMED_STDIN.get("text")))
 
 
 if __name__ == "__main__":

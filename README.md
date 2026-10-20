@@ -33,7 +33,8 @@ shim an agent is running: `multica-daemon` and JC's shell get neither the PATH
 prefix nor the marker, so their `multica` is always the real, ungated CLI.
 Don't unset the marker inside agent environments; the wrappers re-assert PATH
 and the marker after sourcing `.env`, so it stays on even if `.env` clobbers it
-(a clobber is logged in `claude.log`/`pi.log`). Two caveats: `bin/multica` reads
+(a clobbered marker is logged in `claude.log`/`pi.log`; a clobbered PATH is
+silently repaired). Two caveats: `bin/multica` reads
 `MULTICA_BIN` from `.env` but deliberately exports nothing from it — it is NOT
 an env loader; get `MULTICA_SERVER_URL` etc. from the daemon's `.env`. And the
 shim is a mistake-catcher, not a security boundary (see the FOV-2096 spike:

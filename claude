@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Agent runs resolve `multica` through this repo's shim (bin/multica) and carry
 # a marker saying so; see bin/multica. multica-daemon and JC's shell get neither.
+# The pre-shim PATH is kept for the post-.env re-assert below.
+_lwd_path_backup="$PATH"
 PATH="$SCRIPT_DIR/bin:$PATH"
 export LWD_AGENT_RUN=1
 WORKSPACE_DIR="$(pwd)"
@@ -25,7 +27,6 @@ _lwd_model_override="$LWD_MODEL"
 _lwd_allow_mcp_override="$LWD_ALLOW_MCP"
 _lwd_fallback_model_override="$LWD_FALLBACK_MODEL"
 _lwd_effort_override="$LWD_EFFORT"
-_lwd_path_backup="$PATH"
 
 # Source optional .env file (e.g. CLAUDE_BIN overrides)
 if [ -f "$SCRIPT_DIR/.env" ]; then

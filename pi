@@ -57,11 +57,11 @@ fi
 # .env must not be able to switch the agent-run PATH/marker off silently —
 # re-assert both after sourcing (a clobbered marker is logged). PATH first,
 # so the warning's date call resolves.
-_path_clobbered=false
-[ "${LWD_AGENT_RUN:-}" != "1" ] && _path_clobbered=true
+_marker_clobbered=false
+[ "${LWD_AGENT_RUN:-}" != "1" ] && _marker_clobbered=true
 PATH="$SCRIPT_DIR/bin:${_lwd_path_backup:-$PATH}"
 export LWD_AGENT_RUN=1
-[ "$_path_clobbered" = "true" ] && _pi_log "WARNING: .env clobbered LWD_AGENT_RUN; re-asserted"
+[ "$_marker_clobbered" = "true" ] && _pi_log "WARNING: .env clobbered LWD_AGENT_RUN; re-asserted"
 [ -n "$_lwd_model_override" ] && LWD_MODEL="$_lwd_model_override"
 [ -n "$_lwd_effort_override" ] && LWD_EFFORT="$_lwd_effort_override"
 [ -n "$_lwd_hindsight_bank_override" ] && LWD_HINDSIGHT_BANK_ID="$_lwd_hindsight_bank_override"

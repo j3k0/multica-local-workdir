@@ -58,10 +58,13 @@ fi
 
 # ------------------------------------------------------------ gate frame ---
 # Gather the command tokens: all arguments that do not start with `-`, except
-# a value that immediately follows one of the global value-taking flags. This
-# survives `multica --workspace-id <id> issue status …`. Over-matching (e.g.
-# an argument value that happens to look like a command word) costs nothing:
-# a gate that reads more, never less.
+# a value that immediately follows a global value-taking flag. This survives
+# `multica --workspace-id <id> issue status …`. The list is the four flags the
+# real CLI accepts BEFORE a subcommand (verified by brute force in FOV-2096,
+# CLI 0.6.3: --profile/--server-url/--workspace-id/--output) — root --help does
+# not advertise them all, so the probe test in test/multica-shim.test.sh checks
+# the set after any CLI upgrade. Over-matching costs nothing: a gate that reads
+# more, never less.
 _tokens=()
 _skip_value=false
 for _arg in "$@"; do
@@ -70,7 +73,7 @@ for _arg in "$@"; do
     continue
   fi
   case "$_arg" in
-    --workspace-id|--profile|--server-url|--server) _skip_value=true ;;
+    --workspace-id|--profile|--server-url|--output) _skip_value=true ;;
     -*) ;;
     *) _tokens+=("$_arg") ;;
   esac

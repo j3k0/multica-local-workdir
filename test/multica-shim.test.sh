@@ -90,6 +90,29 @@ FAKE|agent|issue status <uuid> done" done
 [ "$(wc -l < "$LOG")" -eq 1 ] && ok "newline in args can't mint a fake log line" || fail "log injection" "$(wc -l < "$LOG") lines"
 grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*\|agent\|issue status' "$LOG" && ok "log line format" || fail "log head" "$(head -1 "$LOG")"
 
+# --- probe: value-taking flags accepted BEFORE a subcommand -----------------
+# Root --help under-enumerates these; brute-force each candidate against the
+# real CLI (needs network + auth) and require every accepted one to be in the
+# shim's skip list — and gated commands to still be caught behind each.
+_flags='--workspace-id --profile --server-url --output --server --output=json --debug --version'
+for f in --profile --output --server-url --workspace-id --server; do
+  err=$(multica "$f" dummy issue get FOV-2096 2>&1); rc=$?
+  # "accepted" = the CLI parsed the flag (the id/workspace may still fail)
+  if ! echo "$err" | grep -qi 'unknown flag\|flag provided but not defined\|unknown shorthand'; then
+    if grep -qF -- "${f}|" bin/multica || grep -qF -- "|${f})" bin/multica; then
+      ok "real CLI accepts $f before subcommand; in skip list"
+    else
+      fail "$f accepted pre-subcommand but missing from skip list"
+    fi
+  fi
+done
+for f in --workspace-id --profile --server-url --output; do
+  clear_log
+  # shellcheck disable=SC2086
+  run_silent 1 "$T/empty" $f dummy issue status X done
+  logged && ok "gated command behind $f dummy" || fail "$f eats gate"
+done
+
 clear_log
 [ "$fails" -eq 0 ] && echo "ALL PASS" || echo "$fails FAILURES"
 exit "$fails"

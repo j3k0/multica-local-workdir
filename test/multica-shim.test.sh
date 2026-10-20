@@ -5,6 +5,11 @@
 # temp copy's parent) is where it writes logs/multica-shim.log — the tests read
 # that, not the repo's logs/. The real CLI is stubbed to exit 9; a fake PATH
 # multica echoes FOUND-REAL.
+# Hermetic: no inherited stdin (agent harnesses hold it open, so a stub's
+# `cat` would block forever — FOV-2098 watchdog kills) and no ambient gate
+# knobs (the wrappers export .env's LWD_GATE_* into agent runs).
+exec </dev/null
+unset LWD_GATE_AGENTS LWD_GATE_ENFORCE_AGENTS LWD_GATE_MODE LWD_GATE_DONE_AGENTS LWD_GATE_FORBIDDEN
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT

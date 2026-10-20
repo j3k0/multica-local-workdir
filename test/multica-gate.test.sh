@@ -6,6 +6,11 @@
 # changes, plain args for reads/side steps, "BODY:..." for piped stdin) and
 # answers the reads the gate needs (agent list, issue get, comment list).
 # Primary calls exit 0, so post-success side steps run.
+# Hermetic: no inherited stdin (agent harnesses hold it open, so a stub's
+# `cat` would block forever — FOV-2098 watchdog kills) and no ambient gate
+# knobs (the wrappers export .env's LWD_GATE_* into agent runs).
+exec </dev/null
+unset LWD_GATE_AGENTS LWD_GATE_ENFORCE_AGENTS LWD_GATE_MODE LWD_GATE_DONE_AGENTS LWD_GATE_FORBIDDEN
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT

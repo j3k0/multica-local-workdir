@@ -74,7 +74,7 @@ command -v python3 >/dev/null 2>&1 && note "ok  python3" || fail="$fail
 
 # --- 4: shim end-to-end passthrough ----------------------------------------
 shim_out="$(cd "$SCRIPT_DIR" && PATH="$SCRIPT_DIR/bin:$PATH" LWD_AGENT_RUN=1 \
-  "$SCRIPT_DIR/bin/multica" --help 2>&1)"
+  timeout 60 "$SCRIPT_DIR/bin/multica" --help </dev/null 2>&1)"
 rc=$?
 [ $rc -eq 0 ] && note "ok  shim passthrough (--help via bin/multica)" \
   || { fail="$fail
@@ -82,10 +82,10 @@ rc=$?
 
 # --- 5: test suites (skip with --no-tests on a very slow box) ---------------
 if [ "${1:-}" != "--no-tests" ]; then
-  bash "$SCRIPT_DIR/test/multica-gate.test.sh" >/dev/null 2>&1 \
+  bash "$SCRIPT_DIR/test/multica-gate.test.sh" </dev/null >/dev/null 2>&1 \
     && note "ok  gate test suite" || fail="$fail
   bin/multica-gate.py: test/multica-gate.test.sh FAILED — do not leave this deploy in"
-  bash "$SCRIPT_DIR/test/multica-shim.test.sh" >/dev/null 2>&1 \
+  bash "$SCRIPT_DIR/test/multica-shim.test.sh" </dev/null >/dev/null 2>&1 \
     && note "ok  shim test suite" || fail="$fail
   bin/multica: test/multica-shim.test.sh FAILED — do not leave this deploy in"
 fi

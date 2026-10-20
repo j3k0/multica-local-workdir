@@ -495,7 +495,7 @@ def status_problem(key, issue_id, has_waiting):
     if key == "done":
         if SELF_NAME.lower() in DONE_AGENTS:
             say(f"done allowed for {SELF_NAME} (LWD_GATE_DONE_AGENTS)")
-            log("done-allowlisted", ["issue", "status", issue_id, "done"])
+            log("done-allowlisted", ["issue", "status", issue_id, "done", f"by={SELF_NAME}"])
             return None
         return DONE_MSG.replace("<id>", issue_id)
     if key == "blocked" and not has_waiting:

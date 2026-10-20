@@ -21,10 +21,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export LWD_PI_VARIANT=omp
 
-# Agent runs resolve `multica` through this repo's shim (bin/multica) and carry
-# a marker saying so; see bin/multica. Redundant with the `pi` wrapper this
-# execs, but explicit — this script can also be run directly (runtime profiles).
-PATH="$SCRIPT_DIR/bin:$PATH"
-export LWD_AGENT_RUN=1
+# The PATH shim and agent-run marker (bin/multica) are set by the `pi` wrapper
+# this execs — including the LWD_GATE_AGENTS canary switch (FOV-2098), so omp
+# must not prepend bin/ itself: a non-canary agent would keep the shim on PATH.
 
 exec "$SCRIPT_DIR/pi" "$@"

@@ -121,10 +121,14 @@ if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${#_tokens[@]}" -gt 0 ]; then
       fi
       if [ -n "$_gate_agents" ]; then
         _in_list=false
-        for _n in ${_gate_agents//,/ }; do
+        IFS=, read -r -a _lst <<< "$_gate_agents"
+        for _n in "${_lst[@]}"; do
+          _n="${_n#"${_n%%[![:space:]]*}"}"; _n="${_n%"${_n##*[![:space:]]}"}"
           [ "$(printf '%s' "$_n" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${MULTICA_AGENT_NAME:-}" | tr '[:upper:]' '[:lower:]')" ] && _in_list=true
         done
         if [ "$_in_list" != "true" ]; then
+          # evidence line: a bypassed run must be counted, not absent (review of FOV-2098)
+          printf '%s|gate|bypass|not-in-list|%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(printf '%s ' "$@" | cut -c 1-300)" >> "$LOG_FILE" 2>/dev/null || true
           printf 'bin/multica: %s is not in LWD_GATE_AGENTS; no gate for this run\n' "${MULTICA_AGENT_NAME:-<unknown agent>}" >&2 || true
           exec "$real_bin" "$@"
         fi
@@ -135,14 +139,16 @@ if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${#_tokens[@]}" -gt 0 ]; then
         _enforce_agents="$(. "$REPO_DIR/.env" >/dev/null 2>&1; printf '%s' "${LWD_GATE_ENFORCE_AGENTS:-}")"
       fi
       if [ -n "$_enforce_agents" ]; then
-        for _n in ${_enforce_agents//,/ }; do
+        IFS=, read -r -a _lst <<< "$_enforce_agents"
+        for _n in "${_lst[@]}"; do
+          _n="${_n#"${_n%%[![:space:]]*}"}"; _n="${_n%"${_n##*[![:space:]]}"}"
           if [ "$(printf '%s' "$_n" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${MULTICA_AGENT_NAME:-}" | tr '[:upper:]' '[:lower:]')" ]; then
             _gate_mode=enforce
             break
           fi
         done
       fi
-      unset _gate_agents _enforce_agents _n _in_list
+      unset _gate_agents _enforce_agents _n _in_list _lst
       MULTICA_REAL_BIN="$real_bin" \
       LWD_GATE_LOG="$LOG_FILE" \
       LWD_GATE_MODE="$_gate_mode" \

@@ -19,12 +19,15 @@ _lwd_shim_on=true
 if [ -n "$_lwd_gate_agents" ]; then
   _lwd_shim_on=false
   if [ -n "${MULTICA_AGENT_NAME:-}" ]; then
-    for _a in ${_lwd_gate_agents//,/ }; do
+    IFS=, read -r -a _lwd_list <<< "$_lwd_gate_agents"
+    for _a in "${_lwd_list[@]}"; do
+      _a="${_a#"${_a%%[![:space:]]*}"}"; _a="${_a%"${_a##*[![:space:]]}"}"
       [ "$(printf '%s' "$_a" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${MULTICA_AGENT_NAME:-}" | tr '[:upper:]' '[:lower:]')" ] && _lwd_shim_on=true
     done
   fi
 fi
-unset _lwd_gate_agents _a
+_lwd_gate_agents_resolved="$_lwd_gate_agents"
+unset _lwd_gate_agents _a _lwd_list
 if [ "$_lwd_shim_on" = true ]; then
   PATH="$SCRIPT_DIR/bin:$PATH"
   export LWD_AGENT_RUN=1
@@ -66,6 +69,9 @@ fi
 # re-assert both after sourcing (a clobbered marker is logged). PATH first, so
 # the warning's date call resolves.
 env_clobbered=false
+# The wrapper's canary decision and the agent's shim must read the same list: .env
+# (sourced with set -a) would otherwise overwrite an ambient value.
+[ -n "$_lwd_gate_agents_resolved" ] && export LWD_GATE_AGENTS="$_lwd_gate_agents_resolved"
 [ "$_lwd_shim_on" = true ] && {
   [ "${LWD_AGENT_RUN:-}" != "1" ] && env_clobbered=true
   PATH="$SCRIPT_DIR/bin:${_lwd_path_backup:-$PATH}"

@@ -25,18 +25,19 @@
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HEALTH_ISSUE="${LWD_HEALTH_ISSUE:-01a157dd-5962-71d8-b85d-8bab0f496143}"
+# Pinned (not env-overridable) so a stray variable cannot redirect the page.
+HEALTH_ISSUE="01a157dd-5962-71d8-b85d-8bab0f496143"
 
 fail=""; note() { printf '%s\n' "$1"; }  # checks accumulate a failure list
 
 # --- .env (multi values, set-a sourcing like the wrappers) -------------------
 env_of() {
-  local k="$1"
-  printf '%s' "${!k:-}"
-  if [ -f "$SCRIPT_DIR/.env" ]; then
-    local v="$(. "$SCRIPT_DIR/.env" >/dev/null 2>&1; eval "printf '%s' \"\${$k:-}\"")"
-    [ -n "${!k:-}" ] || printf '%s' "$v"
-  fi
+  # .env first: the wrappers source it with set -a, so it overrides the ambient
+  # value at launch. Ambient is only the fallback when .env does not set it.
+  local k="$1" v=""
+  [ -f "$SCRIPT_DIR/.env" ] && v="$(set -a; . "$SCRIPT_DIR/.env" >/dev/null 2>&1; printenv "$k")"
+  [ -n "$v" ] || v="${!k:-}"
+  printf '%s' "$v"
 }
 
 # --- 1/2: binaries ----------------------------------------------------------
@@ -62,6 +63,16 @@ for v in MULTICA_CLAUDE_PATH MULTICA_OPENCODE_PATH MULTICA_PI_PATH MULTICA_OMP_P
   esac
   bin_ok "$p" && note "ok  $v -> $p" || fail="$fail
   $v ($p) is missing / not executable — agent launches on this runtime exit 127 in 0s"
+done
+
+# The REAL agent binaries the wrappers exec (PI_BIN etc.): the 2026-10-08
+# outage was a stale PI_BIN, i.e. THESE, not the wrapper paths above. Unset =
+# resolved from PATH at launch, nothing to check here.
+for v in PI_BIN OMP_BIN CLAUDE_BIN OPENCODE_BIN; do
+  p="$(env_of $v)"
+  [ -n "$p" ] || continue
+  bin_ok "$p" && note "ok  $v -> $p" || fail="$fail
+  $v ($p) from .env is missing / not executable — agent launches on this runtime exit 127 in 0s"
 done
 
 # --- 3: gate pieces ---------------------------------------------------------
@@ -101,7 +112,7 @@ Rollback: the per-agent switch is LWD_GATE_AGENTS in multica-local-workdir/.env 
 
 printf '%s\n' "$page"
 if command -v multica >/dev/null 2>&1; then
-  if printf '%s' "$page" | multica issue comment add "$HEALTH_ISSUE" --content-stdin >/dev/null 2>&1; then
+  if printf '%s' "$page" | multica issue comment add "$HEALTH_ISSUE" --progress --content-stdin >/dev/null 2>&1; then
     note "paged: commented on $HEALTH_ISSUE"
     exit 1
   fi

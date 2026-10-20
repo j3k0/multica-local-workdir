@@ -329,6 +329,15 @@ rc_is 0 "LWD_GATE_ENFORCE_AGENTS: non-member stays in warn"
 LWD_GATE_ENFORCE_AGENTS=RunnerAgent LWD_GATE_AGENTS="FakeAgent,OtherAgent" g warn issue status I done
 rc_is 0 "LWD_GATE_AGENTS (shim off, non-member) beats LWD_GATE_ENFORCE_AGENTS"
 
+# review round 3 (FOV-2098): names with spaces, bypass evidence, done attribution
+mkissue in_progress m-1 member
+MULTICA_AGENT_NAME="Herman Paco" LWD_GATE_AGENTS="Herman Paco, RunnerAgent" g warn issue status I done
+echo "$out" | grep -q "closing is a human" && ok "canary list: name with a space matches" || fail "space name" "$out"
+LWD_GATE_AGENTS="FakeAgent" g warn issue status I done
+grep -q '|gate|bypass|not-in-list|issue status I done' "$LOG" && ok "bypassed run leaves a gate evidence line" || fail "bypass log" "$(cat "$LOG")"
+LWD_GATE_DONE_AGENTS=RunnerAgent g enforce issue status I done
+grep -q 'done-allowlisted.*by=RunnerAgent' "$LOG" && ok "allowlisted close names the agent" || fail "done by=" "$(tail -3 "$LOG")"
+
 # fail-open: a crashing gate still runs the raw command (stdin body kept)
 sed 's/^def comment_add(argv, toks):$/&\n    raise RuntimeError("boom")/' "$REPO/bin/multica-gate.py" > "$T/repo/multica-gate.py"
 g enforce issue comment add I --content hi

@@ -108,11 +108,12 @@ if [ -z "$fail" ]; then
 fi
 page="multica-local-workdir deploy check FAILED on $(hostname) at $(date -u '+%Y-%m-%dT%H:%M:%SZ'):
 $fail
-Rollback: the per-agent switch is LWD_GATE_AGENTS in multica-local-workdir/.env (empty = everyone) — or revert the last commit in that checkout (one-line PATH removal in the wrappers)."
+Rollback: the per-agent switch is LWD_GATE_AGENTS in multica-local-workdir/.env (empty = everyone) — or revert the last commit in that checkout (one-line PATH removal in the wrappers).
+No next actor."
 
 printf '%s\n' "$page"
 if command -v multica >/dev/null 2>&1; then
-  if printf '%s' "$page" | multica issue comment add "$HEALTH_ISSUE" --progress --content-stdin >/dev/null 2>&1; then
+  if printf '%s' "$page" | multica issue comment add "$HEALTH_ISSUE" --content-stdin >/dev/null 2>&1; then
     note "paged: commented on $HEALTH_ISSUE"
     exit 1
   fi

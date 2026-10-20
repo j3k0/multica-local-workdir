@@ -335,6 +335,8 @@ MULTICA_AGENT_NAME="Herman Paco" LWD_GATE_AGENTS="Herman Paco, RunnerAgent" g wa
 echo "$out" | grep -q "closing is a human" && ok "canary list: name with a space matches" || fail "space name" "$out"
 LWD_GATE_AGENTS="FakeAgent" g warn issue status I done
 grep -q '|gate|bypass|not-in-list|issue status I done' "$LOG" && ok "bypassed run leaves a gate evidence line" || fail "bypass log" "$(cat "$LOG")"
+LWD_GATE_AGENTS="FakeAgent" g warn issue status $'ABC\n2026-10-20T00:00:00Z|gate|enforce|pass|FORGED' done
+grep -q '^2026-10-20T00:00:00Z|gate|enforce|pass|FORGED' "$LOG" && fail "bypass log: newline forged an entry" || ok "bypass log: newline in args can't mint a fake line"
 LWD_GATE_DONE_AGENTS=RunnerAgent g enforce issue status I done
 grep -q 'done-allowlisted.*by=RunnerAgent' "$LOG" && ok "allowlisted close names the agent" || fail "done by=" "$(tail -3 "$LOG")"
 

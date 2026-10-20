@@ -100,6 +100,13 @@ Policy on plain commands:
 Tests: `test/multica-shim.test.sh` (passthrough, resolution, marker, log,
 flag probe) and `test/multica-gate.test.sh` (gate branches, fake CLI).
 
+### Canary and deploy (FOV-2098)
+
+- `LWD_GATE_AGENTS` (`.env` or per-agent env; comma list, matched against the agent name, case-insensitive; quote names with spaces) puts only those agents behind the shim. Empty/unset = everyone. Deleting the line is the rollback. Agents outside the list log `|gate|bypass|not-in-list|` in `logs/multica-shim.log`.
+- `LWD_GATE_ENFORCE_AGENTS` runs the gate in enforce mode for just those agents; everyone else stays in `LWD_GATE_MODE`.
+- **After every pull/deploy run `bin/deploy-check.sh`** (add `--no-tests` on a slow box). It checks the real agent binaries (`PI_BIN`, `OMP_BIN`, `CLAUDE_BIN`, `OPENCODE_BIN`), the wrapper paths, the shim, the gate, `python3`, and both test suites, then comments on FOV-2098 and exits 1 on failure. It catches the 2026-10-08 class (stale binary path, every launch `exit 127` in 0 s). Restart the daemon with `multica-daemon-restart-when-idle`.
+- Run the test suites with `</dev/null`; an open stdin hangs stub CLIs that `cat`.
+
 ## Telling the wrapper which project to use
 
 Set `LOCAL_WORKING_PATH=/abs/path/to/project` in the environment multica launches agents under. (Alternatively, append `--working-directory <path>` to the agent's extra args in multica's per-agent configuration.)

@@ -128,7 +128,8 @@ if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${#_tokens[@]}" -gt 0 ]; then
         done
         if [ "$_in_list" != "true" ]; then
           # evidence line: a bypassed run must be counted, not absent (review of FOV-2098)
-          printf '%s|gate|bypass|not-in-list|%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(printf '%s ' "$@" | cut -c 1-300)" >> "$LOG_FILE" 2>/dev/null || true
+          # %q-quoted like the |agent| line: a newline in argv cannot mint a fake entry
+          { printf '%s|gate|bypass|not-in-list|' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; printf '%q ' "$@" | cut -c 1-300; printf '\n'; } >> "$LOG_FILE" 2>/dev/null || true
           printf 'bin/multica: %s is not in LWD_GATE_AGENTS; no gate for this run\n' "${MULTICA_AGENT_NAME:-<unknown agent>}" >&2 || true
           exec "$real_bin" "$@"
         fi

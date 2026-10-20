@@ -56,8 +56,11 @@ SELF_NAME = os.environ.get("MULTICA_AGENT_NAME", "")
 FORBIDDEN = {n.strip().lower() for n in os.environ.get(
     "LWD_GATE_FORBIDDEN", "Integrity,Librarian,IAPDAPM,LODAPM,TRIGAPM").split(",") if n.strip()}
 # Agents allowed to set `done` (e.g. Secretary closing on JC's recorded approve,
-# FOV-2064a). Empty by default; every allowlisted close is logged.
-DONE_AGENTS = {n.strip().lower() for n in os.environ.get("LWD_GATE_DONE_AGENTS", "").split(",") if n.strip()}
+# FOV-2064a). `secretary` is the one default member (decided on FOV-2097a: the
+# Secretary's close on JC's recorded `approve` must keep working in enforce
+# mode); every allowlisted close is logged.
+DONE_AGENTS = {n.strip().lower() for n in os.environ.get(
+    "LWD_GATE_DONE_AGENTS", "secretary").split(",") if n.strip()}
 
 DONE_MSG = "closing is a human's call; use: multica issue comment add <id> --next-human <human-name>"
 
@@ -382,9 +385,9 @@ def comment_add(argv, toks):
             say("HANDOFF DID NOT LAND: the comment was not posted; assignee and status unchanged")
             sys.exit(rc)
         if side(["issue", "assign", issue_id, "--to", human, "--no-start"]) != 0:
-            say(f"HANDOFF INCOMPLETE: comment posted, but assigning '{human}' failed, so the status was "
-                f"NOT changed. Fix: multica issue assign {issue_id} --to <exact human name> --no-start, "
-                f"then the status")
+            say(f"HANDOFF INCOMPLETE: the comment IS POSTED; do not re-run it. But assigning '{human}' "
+                f"failed, so the status was NOT changed. Fix: multica issue assign {issue_id} --to "
+                f"<exact human name> --no-start, then the status")
             log("next-human assign-failed", argv)
             sys.exit(SIDE_FAILED)
         if "--waiting-on" in nf:
@@ -395,7 +398,8 @@ def comment_add(argv, toks):
             ok_ = clear_waiting(issue_id, iss)
             ok_ = side(["issue", "status", issue_id, "in_review", "--no-start"]) == 0 and ok_
         if not ok_:
-            say("HANDOFF INCOMPLETE: comment posted and human assigned, but a status/metadata step failed (above)")
+            say("HANDOFF INCOMPLETE: the comment IS POSTED; do not re-run it. The human is assigned, "
+                "but a status/metadata step failed (above) — carry that side step out by hand")
             sys.exit(SIDE_FAILED)
         sys.exit(0)
 
@@ -431,8 +435,9 @@ def comment_add(argv, toks):
     if not owned:
         owned = assigned = side(["issue", "assign", issue_id, "--to-id", aid, "--no-start"]) == 0
         if not owned:
-            say(f"ownership stays with the previous assignee; status left unchanged. The mention still "
-                f"dispatches {aname}. Fix after: multica issue assign {issue_id} --to-id {aid} --no-start")
+            say(f"COMMENT IS POSTED; do not re-run it: the ownership side step failed, so ownership stays "
+                f"with the previous assignee and status is unchanged. The mention still dispatches {aname}. "
+                f"Fix after: multica issue assign {issue_id} --to-id {aid} --no-start")
     if owned:
         if iss is None or prev_status != "in_progress":
             moved = side(["issue", "status", issue_id, "in_progress", "--no-start"]) == 0
@@ -440,15 +445,22 @@ def comment_add(argv, toks):
     rc = run(argv, stdin_text)
     log(f"next rc={rc}", argv)
     if rc != 0:
-        say("HANDOFF DID NOT LAND: the comment was not posted and nobody was dispatched; rolling back")
-        if assigned and iss is not None:
-            side(["issue", "assign", issue_id, "--no-start"] +
-                 (["--to-id", prev_assignee] if prev_assignee else ["--unassign"]))
-        if moved and prev_status:
-            side(["issue", "status", issue_id, prev_status, "--no-start"])
-        if cleared:
-            side(["issue", "metadata", "set", issue_id, "--key", "waiting_on",
-                  "--value", str(prev_waiting), "--type", "string"])
+        if iss is None:
+            # Review nit (FOV-2097): with the issue unreadable there are no
+            # previous assignee/status values to restore — say so instead of
+            # promising a rollback that would never run.
+            say("HANDOFF DID NOT LAND: the comment was not posted and nobody was dispatched "
+                "(the issue was unreadable, so ownership was never changed — nothing to roll back)")
+        else:
+            say("HANDOFF DID NOT LAND: the comment was not posted and nobody was dispatched; rolling back")
+            if assigned and iss is not None:
+                side(["issue", "assign", issue_id, "--no-start"] +
+                     (["--to-id", prev_assignee] if prev_assignee else ["--unassign"]))
+            if moved and prev_status:
+                side(["issue", "status", issue_id, prev_status, "--no-start"])
+            if cleared:
+                side(["issue", "metadata", "set", issue_id, "--key", "waiting_on",
+                      "--value", str(prev_waiting), "--type", "string"])
         sys.exit(rc)
     sys.exit(0 if owned else SIDE_FAILED)
 

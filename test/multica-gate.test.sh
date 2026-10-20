@@ -28,7 +28,7 @@ printf '[{"id":"%s","name":"FakeAgent"},{"id":"%s","name":"OtherAgent"},{"id":"%
 cat > "$T/stub" <<'EOF'
 #!/bin/bash
 # STUB_FAIL: a fixed string; any call whose args contain it is logged and exits 1
-if [ -n "$STUB_FAIL" ] && [[ "$*" == *"$STUB_FAIL"* ]]; then echo "FAILED:$*" >> "$STUB_CALLS"; echo "stub: forced failure" >&2; exit 1; fi
+if [ -n "$STUB_FAIL" ] && [[ "$*" == *"$STUB_FAIL"* ]] || { [ -n "${STUB_FAIL2:-}" ] && [[ "$*" == *"$STUB_FAIL2"* ]]; }; then echo "FAILED:$*" >> "$STUB_CALLS"; echo "stub: forced failure" >&2; exit 1; fi
 if [ "$1 $2" = "agent list" ]; then echo "agent list" >> "$STUB_CALLS"; cat "$STUB_AGENTS"; exit 0; fi
 if [ "$1 $2" = "issue get" ]; then echo "$*" >> "$STUB_CALLS"; cat "$STUB_ISSUE"; exit 0; fi
 if [ "$1 $2 $3" = "issue comment list" ]; then echo "$*" >> "$STUB_CALLS"; cat "$STUB_COMMENTS" 2>/dev/null || echo "[]"; exit 0; fi
@@ -284,6 +284,45 @@ g enforce issue assign I --to OtherAgent --no-start; rc_is 0 "assign --no-start 
 g enforce issue create --title t --status blocked; rc_is 0 "create blocked without assignee passes"
 mkissue in_progress "$FA2" agent
 g enforce issue status I todo; says "issue status I blocked" "todo advice names the real issue id"
+
+# ------------------------------------------- review round 2 (FOV-2098) ---
+# exit-4 messages say the comment IS posted (no duplicate retries)
+mkissue in_progress "$FA2" agent
+STUB_FAIL="issue assign" g enforce issue comment add I --content hi --next-human Typo
+says "do not re-run" "--next-human: exit-4 message says the comment IS posted"
+STUB_FAIL="issue assign" g enforce issue comment add I --content hi --next FakeAgent
+says "do not re-run" "--next: failed-assign message says the comment IS posted"
+# failed post with the issue unreadable: no rollback promise, no rollback calls
+rm -rf "$T/cache"; mkissue in_progress "$FA2" agent
+STUB_FAIL="issue get" g enforce issue comment add I --content hi --next FakeAgent
+rc_is 0 "issue get failed: post still goes out (checks skipped, fail-open)"
+mkissue in_review "$FA2" agent "JC, until friday"
+STUB_FAIL="issue get" STUB_FAIL2="comment add" g warn issue comment add I --content resume --next FakeAgent
+rc_is 1 "issue get failed: failed post returns the CLI's code"
+says "nothing to roll back" "failed-post: rollback promise dropped when the issue was unreadable"
+hasnt "issue assign I --no-start" "failed-post (unreadable issue): no rollback side steps"
+# secretary in the default done allowlist
+mkissue in_progress m-1 member
+unset LWD_GATE_DONE_AGENTS
+MULTICA_AGENT_NAME=Secretary g enforce issue status I done
+rc_is 0 "secretary: done allowed by default (FOV-2097a)"
+grep -q 'done-allowlisted' "$LOG" && ok "secretary default close logged" || fail "secretary log" "$(cat "$LOG")"
+# canary switches
+MULTICA_AGENT_NAME=RunnerAgent g warn issue status I done
+rc_is 0 "LWD_GATE_AGENTS unset: everyone is shimmed (warn advice)"
+LWD_GATE_AGENTS="FakeAgent,OtherAgent" g warn issue status I done
+rc_is 0 "LWD_GATE_AGENTS without this agent: no gate at all — passthrough"
+echo "$out" | grep -q "must name its next actor\|clobbered" && fail "canary: gate advice leaked" "$out" || ok "canary non-member: no gate advice"
+LWD_GATE_AGENTS=runneragent g warn issue status I done
+rc_is 0 "canary list is case-insensitive"
+echo "$out" | grep -q "closing is a human" && ok "canary ci: gate advice present" || fail "canary ci" "$out"
+LWD_GATE_ENFORCE_AGENTS=RunnerAgent g warn issue status I done; rc_is 3 "LWD_GATE_ENFORCE_AGENTS: member runs in enforce"
+LWD_GATE_ENFORCE_AGENTS=RunnerAgent g warn issue status I in_progress
+rc_is 0 "LWD_GATE_ENFORCE_AGENTS: allowed command unaffected"
+LWD_GATE_ENFORCE_AGENTS=OtherAgent g warn issue status I done
+rc_is 0 "LWD_GATE_ENFORCE_AGENTS: non-member stays in warn"
+LWD_GATE_ENFORCE_AGENTS=RunnerAgent LWD_GATE_AGENTS="FakeAgent,OtherAgent" g warn issue status I done
+rc_is 0 "LWD_GATE_AGENTS (shim off, non-member) beats LWD_GATE_ENFORCE_AGENTS"
 
 # fail-open: a crashing gate still runs the raw command (stdin body kept)
 sed 's/^def comment_add(argv, toks):$/&\n    raise RuntimeError("boom")/' "$REPO/bin/multica-gate.py" > "$T/repo/multica-gate.py"

@@ -7,8 +7,29 @@ WORKSPACE_DIR="$(pwd)"
 # Agent runs resolve `multica` through this repo's shim (bin/multica) and carry
 # a marker saying so; see bin/multica. multica-daemon and JC's shell get neither.
 _lwd_path_backup="$PATH"
-PATH="$SCRIPT_DIR/bin:$PATH"
-export LWD_AGENT_RUN=1
+# FOV-2098 canary switch: LWD_GATE_AGENTS (ambient > .env, comma list) shims
+# only the named agents; unset/empty shims everyone. Unknown agent name + a set
+# list = no shim (fail-open; silent like the rest of this wrapper).
+_lwd_gate_agents="${LWD_GATE_AGENTS:-}"
+if [ -z "$_lwd_gate_agents" ] && [ -f "$SCRIPT_DIR/.env" ]; then
+  _lwd_gate_agents="$(. "$SCRIPT_DIR/.env" >/dev/null 2>&1; printf '%s' "${LWD_GATE_AGENTS:-}")"
+fi
+_lwd_shim_on=true
+if [ -n "$_lwd_gate_agents" ]; then
+  _lwd_shim_on=false
+  if [ -n "${MULTICA_AGENT_NAME:-}" ]; then
+    for _a in ${_lwd_gate_agents//,/ }; do
+      [ "$(printf '%s' "$_a" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${MULTICA_AGENT_NAME:-}" | tr '[:upper:]' '[:lower:]')" ] && _lwd_shim_on=true
+    done
+  fi
+fi
+unset _lwd_gate_agents _a
+if [ "$_lwd_shim_on" = true ]; then
+  PATH="$SCRIPT_DIR/bin:$PATH"
+  export LWD_AGENT_RUN=1
+else
+  unset LWD_AGENT_RUN
+fi
 
 # Source optional .env file (e.g. OPENCODE_BIN overrides)
 if [ -f "$SCRIPT_DIR/.env" ]; then
@@ -19,8 +40,10 @@ fi
 
 # .env must not be able to switch the agent-run PATH/marker off silently —
 # re-assert both after sourcing (no log infra in this wrapper; silent by design).
-PATH="$SCRIPT_DIR/bin:${_lwd_path_backup:-$PATH}"
-export LWD_AGENT_RUN=1
+[ "$_lwd_shim_on" = true ] && {
+  PATH="$SCRIPT_DIR/bin:${_lwd_path_backup:-$PATH}"
+  export LWD_AGENT_RUN=1
+}
 
 working_dir=""
 

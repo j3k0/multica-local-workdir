@@ -25,12 +25,24 @@ _lwd_model_override="$LWD_MODEL"
 _lwd_allow_mcp_override="$LWD_ALLOW_MCP"
 _lwd_fallback_model_override="$LWD_FALLBACK_MODEL"
 _lwd_effort_override="$LWD_EFFORT"
+_lwd_path_backup="$PATH"
 
 # Source optional .env file (e.g. CLAUDE_BIN overrides)
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -a
   . "$SCRIPT_DIR/.env"
   set +a
+fi
+
+# .env must not be able to switch the agent-run PATH/marker off silently —
+# re-assert both after sourcing (a clobbered marker is logged). PATH first, so
+# the warning's date call resolves.
+env_clobbered=false
+[ "${LWD_AGENT_RUN:-}" != "1" ] && env_clobbered=true
+PATH="$SCRIPT_DIR/bin:${_lwd_path_backup:-$PATH}"
+export LWD_AGENT_RUN=1
+if [ "$env_clobbered" = "true" ]; then
+  printf '%s WARNING: .env clobbered LWD_AGENT_RUN; re-asserted\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" >> "${_log_dir:-$SCRIPT_DIR/logs}/claude.log" 2>/dev/null || true
 fi
 
 # --- Per-task settings (highest priority) -----------------------------------

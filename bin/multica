@@ -8,7 +8,10 @@ set -e
 # and export LWD_AGENT_RUN=1, so a bare `multica` typed by an agent lands here.
 # multica-daemon does NOT get this PATH, and neither does JC's shell — that is
 # what the marker disambiguates: LWD_AGENT_RUN=1 says "an agent is running",
-# and only agent runs get gated behaviour (gates themselves are step 3).
+# and only agent runs get gated behaviour (gates themselves are step 3). The
+# marker is agent-settable inside a run, so this shim is a mistake-catcher and
+# observability layer, NOT a security boundary (see the FOV-2096 spike: agents
+# hold a live MULTICA_TOKEN).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
@@ -18,57 +21,83 @@ LOG_FILE="$REPO_DIR/logs/multica-shim.log"
 # Real binary: ambient MULTICA_BIN, then MULTICA_BIN from .env (read in a
 # subshell so nothing else in .env — secrets — leaks into the CLI's env), then
 # PATH, skipping this directory (a bare PATH lookup here would find this shim
-# — recursion).
+# — recursion). A set-but-unusable MULTICA_BIN falls through to PATH with a
+# warning rather than killing every multica call on the host; a totally
+# missing binary fails loud.
 real_bin="${MULTICA_BIN:-}"
 if [ -z "$real_bin" ] && [ -f "$REPO_DIR/.env" ]; then
   real_bin="$(. "$REPO_DIR/.env" >/dev/null 2>&1; printf '%s' "${MULTICA_BIN:-}")"
+fi
+if [ -n "$real_bin" ]; then
+  if [ ! -f "$real_bin" ] || [ ! -x "$real_bin" ] || [ -d "$real_bin" ]; then
+    echo "bin/multica: warning: MULTICA_BIN ($real_bin) is not an executable file; falling back to PATH (fix .env)" >&2
+    real_bin=""
+  fi
 fi
 if [ -z "$real_bin" ]; then
   IFS=: read -r -a _path_dirs <<< "$PATH"
   for _d in "${_path_dirs[@]}"; do
     [ -n "$_d" ] && [ -d "$_d" ] || continue
-    [ "$(cd "$_d" && pwd -P)" = "$SCRIPT_DIR" ] && continue
-    if [ -x "$_d/multica" ] && [ ! -d "$_d/multica" ]; then
+    [ "$(cd "$_d" 2>/dev/null && pwd -P)" = "$SCRIPT_DIR" ] && continue
+    if [ -f "$_d/multica" ] && [ -x "$_d/multica" ]; then
       real_bin="$_d/multica"
       break
     fi
   done
 fi
-if [ -z "$real_bin" ] || [ ! -x "$real_bin" ]; then
+if [ -z "$real_bin" ]; then
   echo "bin/multica: real multica CLI not found (set MULTICA_BIN in $REPO_DIR/.env)" >&2
   exit 127
 fi
-# Never exec ourselves (MULTICA_BIN pointing back here, or a symlink to us).
-_self="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
-_real_dir="$(cd "$(dirname "$real_bin")" && pwd -P)"
-if [ "$_real_dir/$(basename "$real_bin")" = "$_self" ] \
-   || { [ -L "$real_bin" ] && [ "$(readlink -f "$real_bin")" = "$(readlink -f "$_self")" ]; }; then
+# Never exec ourselves (MULTICA_BIN pointing back here, or a hardlink of us).
+# -ef compares via inode, so it needs no readlink -f (portability: BSD/macOS).
+if [ "$real_bin" -ef "${BASH_SOURCE[0]}" ]; then
   echo "bin/multica: MULTICA_BIN ($real_bin) points at this shim; set it to the real multica CLI" >&2
   exit 127
 fi
 
-# ------------------------------------------------------------- gate frame ---
-# Step 2: agent-run detection + a log of gated invocations; the actual gates
-# replace the logging below in step 3. Commands recognised as gated are logged
-# but still passed through. With no marker set, this whole block is skipped —
-# byte-identical passthrough, no logging.
-if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "$#" -gt 0 ]; then
-  cmd="$1"
-  sub="${2:-}"
+# ------------------------------------------------------------ gate frame ---
+# Gather the command tokens: all arguments that do not start with `-`, except
+# a value that immediately follows one of the global value-taking flags. This
+# survives `multica --workspace-id <id> issue status …`. Over-matching (e.g.
+# an argument value that happens to look like a command word) costs nothing:
+# a gate that reads more, never less.
+_tokens=()
+_skip_value=false
+for _arg in "$@"; do
+  if [ "$_skip_value" = "true" ]; then
+    _skip_value=false
+    continue
+  fi
+  case "$_arg" in
+    --workspace-id|--profile|--server-url|--server) _skip_value=true ;;
+    -*) ;;
+    *) _tokens+=("$_arg") ;;
+  esac
+done
+if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${#_tokens[@]}" -gt 0 ]; then
+  cmd="${_tokens[0]}"
+  sub="${_tokens[1]:-}"
+  sub2="${_tokens[2]:-}"
   gated=false
   # Mutating issue commands only; read commands (issue get/list, …) pass free.
   case "$cmd" in
     issue)
       case "$sub" in
         status|update|assign|create) gated=true ;;
-        comment) [ "${3:-}" = "add" ] && gated=true ;;
+        comment) [ "$sub2" = "add" ] && gated=true ;;
       esac
       ;;
   esac
   if [ "$gated" = "true" ]; then
-    # Best effort: a missing log dir or failed append never breaks a run.
+    # Best-effort log for step 3: %q-quoted argv (immune to timestamp/injection
+    # games), capped at 2000 chars per line so comment payloads can't bloat the
+    # file. A missing log dir or failed append never breaks a run.
     mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
-    printf '%s|agent|%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG_FILE" 2>/dev/null || true
+    {
+      printf '%s|agent|' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      printf '%q ' "$@"
+    } | cut -c 1-2000 >> "$LOG_FILE" 2>/dev/null || true
   fi
 fi
 

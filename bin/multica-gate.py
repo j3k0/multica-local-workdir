@@ -362,7 +362,8 @@ def comment_add(argv, toks):
         iss = issue(issue_id)
         if iss and iss.get("status") not in FINISHED:
             refuse(f"--no-next-actor needs the issue in {'/'.join(sorted(FINISHED))} "
-                   f"(it is {iss.get('status')}); finished work goes to a human: --next-human <name>")
+                   f"(it is {iss.get('status')}). Order: first `multica issue status {issue_id} in_review` (or done), "
+                   f"then this comment; or hand finished work to a human instead: --next-human <name>")
         body = (body or "").rstrip("\n")
         # --content values get the CLI's \n escape decoded; other bodies are verbatim
         nl = "\\n" if src == "content" else "\n"

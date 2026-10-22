@@ -164,6 +164,7 @@ g warn issue comment add I --content hi --waiting-on x;            rc_is 3 "--wa
 # ------------------------------------------------------- --no-next-actor ---
 mkissue in_progress "$FA2" agent
 g warn issue comment add I --content note --no-next-actor; rc_is 3 "--no-next-actor on unfinished issue refused"
+says "first \`multica issue status I in_review\`" "--no-next-actor refusal names the order (status first)"
 mkissue in_review "$FA2" member
 g enforce issue comment add I --content "wrapped up" --no-next-actor
 rc_is 0 "--no-next-actor on in_review"

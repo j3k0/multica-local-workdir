@@ -132,5 +132,20 @@ into the payload or printed.
   set in `~/.config/openrouter-alert.env`, it also alerts when the balance falls
   below `OPENROUTER_MIN_USD` (default 10). Timer: `openrouter-alert.timer`, every 15 min.
 
-Install: `ln -s $PWD/systemd/*.{service,timer} ~/.config/systemd/user/ &&
-systemctl --user daemon-reload && systemctl --user enable --now hindsight-refresh.timer openrouter-alert.timer`.
+- Alerts are deduped per kind (`alert_key=openrouter-credit` /
+  `hindsight-logs-unreadable`, plus the id in `~/.local/state/openrouter-alert/open-<kind>`).
+  **Close the alert issue after topping up**, or it stays silent.
+- Accepted residual risk: if `openrouter-alert.sh` itself fails every run (e.g.
+  Multica auth expired), nothing notices. Same class as the FOV-2067 dead-man; not built.
+
+Install (keep `/opt/projects/tools/multica-local-workdir` on `main`: the units run from it):
+
+```sh
+H=/opt/projects/tools/multica-local-workdir/hindsight
+install -m 600 /dev/null ~/.config/openrouter-alert.env   # optional OPENROUTER_MGMT_KEY / OPENROUTER_MIN_USD
+ln -s $H/systemd/*.service $H/systemd/*.timer ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now hindsight-refresh.timer openrouter-alert.timer
+```
+
+Rollback: `systemctl --user disable --now hindsight-refresh.timer openrouter-alert.timer`, then remove the links.
+Tests: `hindsight/tests/fake-binaries.sh` (no live writes).

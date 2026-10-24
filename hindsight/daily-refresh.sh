@@ -4,8 +4,8 @@
 # both its last refresh and our last attempt on it are older than MIN_AGE seconds
 # (default 86400 = daily; 3600 = hourly). The attempt record (state dir) means a queued or
 # failing refresh is not re-posted every hour: at most one attempt per model per MIN_AGE.
-# Skips the whole run while recall is failing (any RECALL ERROR in the last 10 min), or if the
-# logs can't be read, so models are never rebuilt from stale content.
+# Skips the whole run while recall is failing (any RECALL ERROR in the last 10 min, or an
+# OpenRouter 402 within MIN_AGE), or if the logs can't be read, so models are never rebuilt from stale content.
 # Usage: daily-refresh.sh [--apply]   (default: dry run)
 set -euo pipefail
 A="${HINDSIGHT_API:-http://127.0.0.1:18888}"
@@ -19,9 +19,16 @@ if ! logs=$(docker logs --since 10m hindsight 2>&1); then
 fi
 errs=$(grep -c 'RECALL ERROR' <<<"$logs" || true)
 if (( errs > 0 )); then echo "SKIP RUN: $errs RECALL ERROR(s) in the last 10 min"; exit 0; fi
+# A credit outage in quiet hours leaves no RECALL ERROR in the window: also skip for MIN_AGE
+# after the last 402 the credit alert saw.
+L402="${XDG_STATE_HOME:-$HOME/.local/state}/openrouter-alert/last-402"
+if [[ -f "$L402" ]] && (( now - $(stat -c %Y "$L402") < MIN_AGE )); then
+  echo "SKIP RUN: OpenRouter 402 seen less than ${MIN_AGE}s ago ($(cat "$L402"))"; exit 0
+fi
 
 queued=0; fresh=0; fail=0
-for b in $(curl -fsS -m 30 "$A/v1/default/banks" | jq -r '.banks[].bank_id'); do
+banks=$(curl -fsS -m 30 "$A/v1/default/banks" | jq -er '.banks[].bank_id')   # set -e: API down = exit 1
+for b in $banks; do
   models=$(curl -fsS -m 30 "$A/v1/default/banks/$b/mental-models" | jq -c '.items')
   [[ "$models" == "[]" ]] && continue
   cons=$(curl -fsS -m 30 "$A/v1/default/banks/$b/stats" | jq '.last_consolidated_at' | ts)

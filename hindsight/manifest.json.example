@@ -22,35 +22,35 @@
           "name": "User Preferences",
           "max_tokens": 600,
           "source_query": "What does the user durably prefer in coding style, tooling, communication, and review? Capture only preferences that have held across multiple sessions; exclude one-off requests and transient context.",
-          "trigger": { "refresh_after_consolidation": true }
+          "trigger": { "refresh_after_consolidation": false }
         },
         {
           "id": "red-lines",
           "name": "Red Lines & Standing Rules",
           "max_tokens": 600,
           "source_query": "What explicit standing rules, red lines, and 'do not do this' instructions has the user given that should persist going forward? Capture only rules meant to apply generally; exclude one-off corrections and task-specific constraints.",
-          "trigger": { "refresh_after_consolidation": true }
+          "trigger": { "refresh_after_consolidation": false }
         },
         {
           "id": "where-things-live",
           "name": "Systems of Record & Locations",
           "max_tokens": 800,
           "source_query": "Where do key things live, and what are the systems of record — repositories, inventory files, dashboards, credential stores, runbooks, documentation? Record each location, its purpose, and how to reach it. Do NOT record the volatile contents of those sources. Where several projects are involved, state which project each location belongs to.",
-          "trigger": { "refresh_after_consolidation": true }
+          "trigger": { "refresh_after_consolidation": false }
         },
         {
           "id": "decision-log",
           "name": "Decision Log",
           "max_tokens": 800,
           "source_query": "What durable decisions have been made, and with what rationale or trade-offs? Include decisions that superseded earlier ones and mark what they replaced. Exclude transient plans, open questions, and unresolved ideas. Where several projects are involved, state which project each decision applies to.",
-          "trigger": { "refresh_after_consolidation": true }
+          "trigger": { "refresh_after_consolidation": false }
         },
         {
           "id": "failure-modes",
           "name": "Failure Modes & Fixes",
           "max_tokens": 1000,
           "source_query": "What recurring failure modes, bugs, and gotchas have been encountered, and how were they diagnosed and fixed? Note the version, date, or context where relevant so that workarounds superseded by a later fix are clearly marked as such.",
-          "trigger": { "refresh_after_consolidation": true }
+          "trigger": { "refresh_after_consolidation": false }
         }
       ]
     }

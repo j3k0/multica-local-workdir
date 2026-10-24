@@ -111,7 +111,9 @@ into the payload or printed.
 ## Caveats
 
 - Bank ids cannot be renamed. A typo leaves an empty bank behind.
-- Mental models are generated server-side (via reflect) asynchronously and
-  refreshed after consolidation, so they carry a real LLM cost.
+- Mental models are generated server-side (via reflect) asynchronously. Every
+  refresh is an LLM call. Keep `refresh_after_consolidation: false`: with it on,
+  a busy bank refreshed each model ~27 times a day (FOV-2242). Auto-recall never
+  reads mental models; only `hindsight_reflect` does.
 - Hindsight does not expire facts that silently become false. Prefer durable
   facts/pointers, and curate the rest (`PATCH .../memories/{id}` to invalidate).

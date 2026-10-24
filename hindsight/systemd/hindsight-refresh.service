@@ -1,0 +1,10 @@
+[Unit]
+Description=Hindsight: refresh stale mental models (at most daily per model; FOV-2242)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=%h
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin:%h/bin
+TimeoutStartSec=600
+ExecStart=/opt/projects/tools/multica-local-workdir/hindsight/daily-refresh.sh --apply

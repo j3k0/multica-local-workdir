@@ -117,3 +117,35 @@ into the payload or printed.
   reads mental models; only `hindsight_reflect` does.
 - Hindsight does not expire facts that silently become false. Prefer durable
   facts/pointers, and curate the rest (`PATCH .../memories/{id}` to invalidate).
+
+## Scheduled jobs on devbox3 (FOV-2242)
+
+- `daily-refresh.sh`: refreshes a mental model at most once a day (`MIN_AGE`,
+  default 86400 s), and only if its bank consolidated since its last refresh.
+  At most one attempt per model per `MIN_AGE` (state in
+  `~/.local/state/hindsight-refresh/`), so a queued or failing refresh isn't
+  re-posted hourly. Skips while recall is failing, or if the logs can't be read.
+  Timer: `hindsight-refresh.timer`, hourly, so a skipped run is retried.
+- `openrouter-alert.sh`: opens one urgent Multica issue for JC when OpenRouter
+  returns 402 (out of credit) in the hindsight logs, or when the logs can't be
+  read. 402s already alerted on are remembered in `~/.local/state/openrouter-alert/`. If `OPENROUTER_MGMT_KEY` is
+  set in `~/.config/openrouter-alert.env`, it also alerts when the balance falls
+  below `OPENROUTER_MIN_USD` (default 10). Timer: `openrouter-alert.timer`, every 15 min.
+
+- Alerts are deduped per kind (`alert_key=openrouter-credit` /
+  `hindsight-logs-unreadable`, plus the id in `~/.local/state/openrouter-alert/open-<kind>`).
+  **Close the alert issue after topping up**, or it stays silent.
+- Accepted residual risk: if `openrouter-alert.sh` itself fails every run (e.g.
+  Multica auth expired), nothing notices. Same class as the FOV-2067 dead-man; not built.
+
+Install (keep `/opt/projects/tools/multica-local-workdir` on `main`: the units run from it):
+
+```sh
+H=/opt/projects/tools/multica-local-workdir/hindsight
+install -m 600 /dev/null ~/.config/openrouter-alert.env   # optional OPENROUTER_MGMT_KEY / OPENROUTER_MIN_USD
+ln -s $H/systemd/*.service $H/systemd/*.timer ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now hindsight-refresh.timer openrouter-alert.timer
+```
+
+Rollback: `systemctl --user disable --now hindsight-refresh.timer openrouter-alert.timer`, then remove the links.
+Tests: `hindsight/tests/fake-binaries.sh` (no live writes).

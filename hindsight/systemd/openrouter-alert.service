@@ -1,0 +1,13 @@
+[Unit]
+Description=Alert JC when Hindsight's OpenRouter credit is low or out (FOV-2242)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=%h
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin:%h/bin
+# Optional: OPENROUTER_MGMT_KEY (management key, enables the low-balance check) and
+# OPENROUTER_MIN_USD. Never committed. File is optional; without it only the 402 check runs.
+EnvironmentFile=-%h/.config/openrouter-alert.env
+TimeoutStartSec=120
+ExecStart=/opt/projects/tools/multica-local-workdir/hindsight/openrouter-alert.sh

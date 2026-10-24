@@ -1,0 +1,9 @@
+[Unit]
+Description=Hourly check for stale Hindsight mental models
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

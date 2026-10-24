@@ -122,10 +122,13 @@ into the payload or printed.
 
 - `daily-refresh.sh`: refreshes a mental model at most once a day (`MIN_AGE`,
   default 86400 s), and only if its bank consolidated since its last refresh.
-  Skips while recall is failing so models aren't rebuilt from stale content.
+  At most one attempt per model per `MIN_AGE` (state in
+  `~/.local/state/hindsight-refresh/`), so a queued or failing refresh isn't
+  re-posted hourly. Skips while recall is failing, or if the logs can't be read.
   Timer: `hindsight-refresh.timer`, hourly, so a skipped run is retried.
 - `openrouter-alert.sh`: opens one urgent Multica issue for JC when OpenRouter
-  returns 402 (out of credit) in the hindsight logs. If `OPENROUTER_MGMT_KEY` is
+  returns 402 (out of credit) in the hindsight logs, or when the logs can't be
+  read. 402s already alerted on are remembered in `~/.local/state/openrouter-alert/`. If `OPENROUTER_MGMT_KEY` is
   set in `~/.config/openrouter-alert.env`, it also alerts when the balance falls
   below `OPENROUTER_MIN_USD` (default 10). Timer: `openrouter-alert.timer`, every 15 min.
 

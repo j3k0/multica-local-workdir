@@ -14,13 +14,15 @@ JC_ID=315a9855-3e18-440e-b9bb-a5b4ed38bd54
 export MULTICA_WORKSPACE_ID="${MULTICA_WORKSPACE_ID:-7253250f-2139-4450-811b-2f08dd69a242}"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/openrouter-alert"; mkdir -p "$STATE"
 LAST="$STATE/last-402"   # docker timestamp of the newest 402 line already alerted on
+# Compared at whole-second precision (first 19 chars, fixed width): docker trims trailing zeros
+# from the fraction, so full strings don't sort. A second 402 in the same second is ignored.
 problem=""; newest=""
 
 if ! logs=$(docker logs --timestamps --since 20m hindsight 2>&1); then
   problem="Cannot read the hindsight container logs, so the OpenRouter credit check is blind: $(head -c 200 <<<"$logs")"
 else
   seen=$(cat "$LAST" 2>/dev/null || true)
-  new402=$(grep "402 Payment Required' for url 'https://openrouter.ai" <<<"$logs" | awk -v s="$seen" '$1 > s' || true)
+  new402=$(grep "402 Payment Required' for url 'https://openrouter.ai" <<<"$logs" | awk -v s="${seen:0:19}" 'substr($1,1,19) > s' || true)
   if [[ -n "$new402" ]]; then
     newest=$(tail -1 <<<"$new402" | cut -d' ' -f1)
     problem="OpenRouter is refusing requests for lack of credit: $(wc -l <<<"$new402") new HTTP 402 error(s) in the Hindsight logs (latest $newest). Every agent is running without memory until credit is added."
@@ -52,6 +54,7 @@ fi
 echo "ALERT: $problem"
 (( DRY )) && exit 0
 
+# One page (50) of alert_key matches; enough while closed alerts stay few.
 if ! list=$(multica issue list --metadata "alert_key=openrouter-credit" --limit 50 --output json --fields id,status); then
   echo "multica issue list failed; not creating an issue (would risk duplicates)" >&2; exit 1
 fi

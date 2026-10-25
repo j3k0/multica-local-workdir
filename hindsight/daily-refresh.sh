@@ -10,7 +10,8 @@
 # Usage: daily-refresh.sh [--apply]   (default: dry run)
 set -euo pipefail
 A="${HINDSIGHT_API:-http://127.0.0.1:18888}"
-MIN_AGE="${MIN_AGE:-3000}"   # 50 min: with the hourly timer (±5 min jitter) = once per run; now=$(date +%s)
+MIN_AGE="${MIN_AGE:-3000}"   # 50 min: with the hourly timer (±5 min jitter) = once per run
+now=$(date +%s)
 APPLY=0; [[ "${1:-}" == "--apply" ]] && APPLY=1
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/hindsight-refresh"; mkdir -p "$STATE"
 ts() { jq -r 'if . == null then 0 else sub("\\.[0-9]+";"") | sub("\\+00:00$";"Z") | fromdateiso8601 end'; }

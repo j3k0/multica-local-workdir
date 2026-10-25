@@ -10,7 +10,9 @@ Loop (every --interval seconds, default 15):
        - and are doing work: status working / running / pending.
      Any such agent counts as busy and resets the idle counter.
   3. After --idle-checks consecutive idle checks (default 4 ~ 1 minute),
-     run `./multica-daemon restart` and exit.
+     restart the daemon and exit: `systemctl --user restart multica-daemon`
+     when that unit is active or activating (it owns the daemon; a `./multica-daemon
+     restart` would fight it), else `./multica-daemon restart`.
 
 Fail-safe: a check only counts as idle when we positively know that no
 work is in flight. A failed or timed-out `multica agent list` call and an
@@ -123,16 +125,33 @@ def check_busy(runtime_ids):
     return bool(busy), detail
 
 
-def restart(dry_run):
-    if dry_run:
-        log("dry-run: would run ./multica-daemon restart now")
-        return True
-    log("running ./multica-daemon restart …")
+SYSTEMD_UNIT = "multica-daemon"
+OWNED_STATES = {"active", "activating", "reloading"}
+
+
+def restart_cmd():
+    """systemctl when the user unit owns the daemon, else the wrapper."""
+    # ActiveState, not `is-active`: during RestartSec the unit is "activating"
+    # (auto-restart) and is-active fails, but systemd still owns the daemon.
     try:
-        r = subprocess.run(
-            [str(DAEMON), "restart"],
-            capture_output=True, text=True, timeout=RESTART_TIMEOUT,
-        )
+        r = subprocess.run(["systemctl", "--user", "show", "-p", "ActiveState", "--value", SYSTEMD_UNIT],
+                           capture_output=True, text=True, timeout=CALL_TIMEOUT)
+        if r.returncode == 0 and r.stdout.strip() in OWNED_STATES:
+            return ["systemctl", "--user", "restart", SYSTEMD_UNIT]
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return [str(DAEMON), "restart"]
+
+
+def restart(dry_run):
+    cmd = restart_cmd()
+    shown = " ".join("./multica-daemon" if c == str(DAEMON) else c for c in cmd)
+    if dry_run:
+        log(f"dry-run: would run {shown} now")
+        return True
+    log(f"running {shown} …")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=RESTART_TIMEOUT)
     except (subprocess.TimeoutExpired, OSError) as e:
         log(f"ERROR: restart failed: {e}")
         return False
@@ -140,7 +159,7 @@ def restart(dry_run):
     if out:
         log("restart output:\n  " + out.replace("\n", "\n  "))
     if r.returncode != 0:
-        log(f"ERROR: ./multica-daemon restart exited {r.returncode}")
+        log(f"ERROR: {shown} exited {r.returncode}")
         return False
     log("daemon restarted")
     return True

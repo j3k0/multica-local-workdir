@@ -5,3 +5,4 @@ claude-providers/my-*.sh
 health-responder/responder.log
 health-responder/responder.pid
 hindsight/manifest.json
+daemon.env

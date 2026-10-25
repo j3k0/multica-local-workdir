@@ -1,0 +1,38 @@
+# Multica daemon under systemd (FOV-2246). Install:
+#   cp systemd/multica-daemon.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable multica-daemon
+# Keep the unit NAME: the CLI detects `multica-daemon.service` in its cgroup and,
+# on a binary self-update, exits 42 instead of spawning a successor (which the
+# cgroup cleanup would kill). RestartForceExitStatus=42 restarts the new binary.
+[Unit]
+Description=Multica local-workdir daemon (jeko)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=exec
+WorkingDirectory=/opt/projects/tools/multica-local-workdir
+# Same env as a login-shell daemon. Secrets defined inline in ~/.bashrc are
+# copied to daemon.env (untracked, 0600, plain KEY=VALUE): rotate them in both.
+# ~/.config/pi/env uses `export`, which EnvironmentFile ignores, so it is
+# sourced here instead (single source of truth, managed by sync.sh).
+EnvironmentFile=/opt/projects/tools/multica-local-workdir/daemon.env
+ExecStart=/bin/bash -c 'set -a; [ -f %h/.config/pi/env ] && . %h/.config/pi/env; set +a; exec ./multica-daemon start --foreground'
+# Hard-coded nvm node version: update PATH and NVM_* after an nvm upgrade.
+Environment=PATH=/home/jeko/.kimi-code/bin:/home/jeko/.bun/bin:/home/jeko/bin:/home/jeko/.local/bin:/home/jeko/.nvm/versions/node/v22.22.3/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
+Environment=NVM_DIR=/home/jeko/.nvm
+Environment=NVM_BIN=/home/jeko/.nvm/versions/node/v22.22.3/bin
+Environment=NVM_INC=/home/jeko/.nvm/versions/node/v22.22.3/include/node
+Environment=BUN_INSTALL=/home/jeko/.bun
+Environment=LC_ALL=en_US.UTF-8
+# The tmux daemon never had these; the user manager does (empty ssh-agent).
+UnsetEnvironment=SSH_AUTH_SOCK GPG_AGENT_INFO
+# on-failure, not always: `multica daemon stop` exits 0 and must stay stopped.
+Restart=on-failure
+RestartForceExitStatus=42
+RestartSec=10s
+
+[Install]
+WantedBy=default.target

@@ -247,6 +247,10 @@ An unknown provider fails loud and lists the valid names. Per-agent overrides in
 nohup ./multica-daemon-restart-when-idle >> logs/daemon-idle-watch.log 2>&1 &
 ```
 
-It fetches this machine's runtime IDs once at startup from `./multica-daemon status --output json` (the daemon must be reachable for that one call, unless you pass `--runtime-id`), then every 15 seconds lists agents with `multica agent list --output json` and checks only those bound to one of these runtimes. Any agent whose status is `working` / `running` / `pending` counts as busy and resets the idle counter; after 4 consecutive idle checks (about a minute) it runs `./multica-daemon restart` and exits — rerun it to keep watching. Failed agent-list calls and unrecognized statuses count as busy, so the daemon is only restarted in a state the script understands.
+It fetches this machine's runtime IDs once at startup from `./multica-daemon status --output json` (the daemon must be reachable for that one call, unless you pass `--runtime-id`), then every 15 seconds lists agents with `multica agent list --output json` and checks only those bound to one of these runtimes. Any agent whose status is `working` / `running` / `pending` counts as busy and resets the idle counter; after 4 consecutive idle checks (about a minute) it restarts the daemon — `systemctl --user restart multica-daemon` when that unit is active or (re)starting, else `./multica-daemon restart` — and exits — rerun it to keep watching. Failed agent-list calls and unrecognized statuses count as busy, so the daemon is only restarted in a state the script understands.
 
 Tuning: `--interval SECONDS`, `--idle-checks N`, `--runtime-id ID` (repeatable override), `--once` (single check, exit 0 when idle / 1 when busy), `--dry-run` (say it would restart instead of restarting).
+
+## Run the daemon under systemd
+
+`systemd/multica-daemon.service` starts the daemon at boot (user unit; needs linger). Keep the unit name: on a CLI self-update the daemon detects `multica-daemon.service` and exits 42, which `RestartForceExitStatus=42` turns into a restart on the new binary. It needs an untracked `daemon.env` (0600, plain `KEY=VALUE`) holding the login-shell secrets the daemon would otherwise inherit, and sources `~/.config/pi/env`; see the comments in the unit.

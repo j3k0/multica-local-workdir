@@ -7,4 +7,6 @@ Type=oneshot
 Environment=HOME=%h
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin:%h/bin
 TimeoutStartSec=600
+# omp still seeds new banks with refresh_after_consolidation=true: switch those off first.
+ExecStartPre=/opt/projects/tools/multica-local-workdir/hindsight/refresh-off.sh --apply
 ExecStart=/opt/projects/tools/multica-local-workdir/hindsight/daily-refresh.sh --apply

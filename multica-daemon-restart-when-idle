@@ -11,7 +11,7 @@ Loop (every --interval seconds, default 15):
      Any such agent counts as busy and resets the idle counter.
   3. After --idle-checks consecutive idle checks (default 4 ~ 1 minute),
      restart the daemon and exit: `systemctl --user restart multica-daemon`
-     when that unit is active (it owns the daemon; a `./multica-daemon
+     when that unit is active or activating (it owns the daemon; a `./multica-daemon
      restart` would fight it), else `./multica-daemon restart`.
 
 Fail-safe: a check only counts as idle when we positively know that no
@@ -126,14 +126,17 @@ def check_busy(runtime_ids):
 
 
 SYSTEMD_UNIT = "multica-daemon"
+OWNED_STATES = {"active", "activating", "reloading"}
 
 
 def restart_cmd():
     """systemctl when the user unit owns the daemon, else the wrapper."""
+    # ActiveState, not `is-active`: during RestartSec the unit is "activating"
+    # (auto-restart) and is-active fails, but systemd still owns the daemon.
     try:
-        r = subprocess.run(["systemctl", "--user", "is-active", "--quiet", SYSTEMD_UNIT],
-                           capture_output=True, timeout=CALL_TIMEOUT)
-        if r.returncode == 0:
+        r = subprocess.run(["systemctl", "--user", "show", "-p", "ActiveState", "--value", SYSTEMD_UNIT],
+                           capture_output=True, text=True, timeout=CALL_TIMEOUT)
+        if r.returncode == 0 and r.stdout.strip() in OWNED_STATES:
             return ["systemctl", "--user", "restart", SYSTEMD_UNIT]
     except (subprocess.TimeoutExpired, OSError):
         pass

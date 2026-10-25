@@ -27,9 +27,9 @@ if [[ -f "$L402" ]] && (( now - $(stat -c %Y "$L402") < MIN_AGE )); then
 fi
 
 queued=0; fresh=0; fail=0
-banks=$(curl -fsS -m 30 "$A/v1/default/banks" | jq -er '.banks[].bank_id')   # set -e: API down = exit 1
+banks=$(curl -fsS -m 30 "$A/v1/default/banks?limit=1000" | jq -er 'if (.banks|length) == .total then .banks[].bank_id else error("bank list truncated") end')   # set -e: API down or truncated = exit 1
 for b in $banks; do
-  models=$(curl -fsS -m 30 "$A/v1/default/banks/$b/mental-models" | jq -c '.items')
+  models=$(curl -fsS -m 30 "$A/v1/default/banks/$b/mental-models?limit=1000" | jq -ec 'if (.items|length) == .total then .items else error("model list truncated") end')
   [[ "$models" == "[]" ]] && continue
   cons=$(curl -fsS -m 30 "$A/v1/default/banks/$b/stats" | jq '.last_consolidated_at' | ts)
   while read -r m; do
@@ -39,7 +39,7 @@ for b in $banks; do
     if (( ! APPLY )); then echo "DRY  $b/$id"; queued=$((queued+1)); continue; fi
     echo "$now" > "$STATE/$b--$id"
     resp=$(mktemp); code=$(curl -sS -m 30 -o "$resp" -w '%{http_code}' -X POST \
-      "$A/v1/default/banks/$b/mental-models/$id/refresh")
+      "$A/v1/default/banks/$b/mental-models/$id/refresh") || code=000
     case "$code" in
       200|202) echo "OK   $b/$id"; queued=$((queued+1));;
       401) echo "FAIL $b/$id authentication failed"; fail=$((fail+1));;

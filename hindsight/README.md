@@ -126,6 +126,10 @@ into the payload or printed.
   `~/.local/state/hindsight-refresh/`), so a queued or failing refresh isn't
   re-posted hourly. Skips while recall is failing, or if the logs can't be read.
   Timer: `hindsight-refresh.timer`, hourly, so a skipped run is retried.
+- `refresh-off.sh --apply` runs as `ExecStartPre` of the same service. It switches
+  `refresh_after_consolidation` off on any model that has it on, because omp clients
+  still seed new banks with it on (agent-dsa, 2026-10-25). Hindsight 1.1 note: bank lists
+  are paginated (`?limit=1000`), and model lists omit `trigger` unless `detail=content`.
 - `openrouter-alert.sh`: opens one urgent Multica issue for JC when OpenRouter
   returns 402 (out of credit) in the hindsight logs, or when the logs can't be
   read. 402s already alerted on are remembered in `~/.local/state/openrouter-alert/`. If `OPENROUTER_MGMT_KEY` is
@@ -148,4 +152,7 @@ systemctl --user daemon-reload && systemctl --user enable --now hindsight-refres
 ```
 
 Rollback: `systemctl --user disable --now hindsight-refresh.timer openrouter-alert.timer`, then remove the links.
+To restore per-consolidation refresh: first delete the `ExecStartPre` line from
+`systemd/hindsight-refresh.service` and `systemctl --user daemon-reload` (otherwise the next
+hourly run switches it back off), then `hindsight/refresh-off.sh --apply true`.
 Tests: `hindsight/tests/fake-binaries.sh` (no live writes).

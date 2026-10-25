@@ -18,13 +18,16 @@ while [[ $# -gt 0 ]]; do
     *) break;;
   esac
 done
+(( $# <= 1 )) || { echo "unexpected arguments: $* (options go before the value)" >&2; exit 2; }
 VAL="${1:-false}"
+[[ "$VAL" == false || "$VAL" == true ]] || { echo "value must be true or false (options go first: --apply true)" >&2; exit 2; }
+[[ -z "$ONLY" || "$ONLY" =~ ^[^/]+/[^/]+$ ]] || { echo "--only expects BANK/ID" >&2; exit 2; }
 ok=0; skip=0; fail=0; dry=0
-banks=$(curl -fsS -m 30 "$A/v1/default/banks?limit=1000" | jq -er '.banks[].bank_id')
-(( $(wc -l <<<"$banks") < 1000 )) || { echo "1000+ banks: add pagination" >&2; exit 1; }
+# Fails (exit 1) if the server returned fewer rows than its own .total (page capped below limit).
+banks=$(curl -fsS -m 30 "$A/v1/default/banks?limit=1000" | jq -er 'if (.banks|length) == .total then .banks[].bank_id else error("bank list truncated") end')
 [[ -n "$ONLY" ]] && banks="${ONLY%%/*}"
 for b in $banks; do
-  models=$(curl -fsS -m 30 "$A/v1/default/banks/$b/mental-models?detail=content&limit=1000" | jq -ec '[.items[] | {id, trigger}]')
+  models=$(curl -fsS -m 30 "$A/v1/default/banks/$b/mental-models?detail=content&limit=1000" | jq -ec 'if (.items|length) == .total then [.items[] | {id, trigger}] else error("model list truncated") end')
   while read -r m; do
     id=$(jq -r .id <<<"$m")
     [[ -n "$ONLY" && "$b/$id" != "$ONLY" ]] && continue
@@ -36,7 +39,7 @@ for b in $banks; do
     body=$(jq -c --argjson v "$VAL" '{trigger: (.trigger + {refresh_after_consolidation: $v})}' <<<"$m")
     if (( ! APPLY )); then echo "DRY  $b/$id $cur -> $VAL"; dry=$((dry+1)); continue; fi
     resp=$(mktemp); code=$(curl -sS -m 30 -o "$resp" -w '%{http_code}' -X PATCH \
-      -H 'Content-Type: application/json' --data "$body" "$A/v1/default/banks/$b/mental-models/$id")
+      -H 'Content-Type: application/json' --data "$body" "$A/v1/default/banks/$b/mental-models/$id") || code=000
     case "$code" in
       200) echo "OK   $b/$id $cur -> $VAL"; ok=$((ok+1));;
       401) echo "FAIL $b/$id authentication failed"; fail=$((fail+1));;

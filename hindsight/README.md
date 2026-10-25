@@ -152,4 +152,7 @@ systemctl --user daemon-reload && systemctl --user enable --now hindsight-refres
 ```
 
 Rollback: `systemctl --user disable --now hindsight-refresh.timer openrouter-alert.timer`, then remove the links.
+To restore per-consolidation refresh: first delete the `ExecStartPre` line from
+`systemd/hindsight-refresh.service` and `systemctl --user daemon-reload` (otherwise the next
+hourly run switches it back off), then `hindsight/refresh-off.sh --apply true`.
 Tests: `hindsight/tests/fake-binaries.sh` (no live writes).

@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Refresh Hindsight mental models once a day instead of after every consolidation (FOV-2242).
+# Refresh Hindsight mental models at most hourly instead of after every consolidation (FOV-2242;
+# JC chose hourly over daily on 2026-10-25. The file name predates that.)
 # Run hourly. A model is refreshed only if its bank consolidated since its last refresh AND
 # both its last refresh and our last attempt on it are older than MIN_AGE seconds
-# (default 86400 = daily; 3600 = hourly). The attempt record (state dir) means a queued or
-# failing refresh is not re-posted every hour: at most one attempt per model per MIN_AGE.
+# (default 3000 = every hourly run, allowing for timer jitter; 86400 = daily). The attempt record (state dir) means a queued or
+# failing refresh is re-posted at most once per MIN_AGE.
 # Skips the whole run while recall is failing (any RECALL ERROR in the last 10 min, or an
 # OpenRouter 402 within MIN_AGE), or if the logs can't be read, so models are never rebuilt from stale content.
 # Usage: daily-refresh.sh [--apply]   (default: dry run)
 set -euo pipefail
 A="${HINDSIGHT_API:-http://127.0.0.1:18888}"
-MIN_AGE="${MIN_AGE:-86400}"; now=$(date +%s)
+MIN_AGE="${MIN_AGE:-3000}"   # 50 min: with the hourly timer (±5 min jitter) = once per run; now=$(date +%s)
 APPLY=0; [[ "${1:-}" == "--apply" ]] && APPLY=1
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/hindsight-refresh"; mkdir -p "$STATE"
 ts() { jq -r 'if . == null then 0 else sub("\\.[0-9]+";"") | sub("\\+00:00$";"Z") | fromdateiso8601 end'; }

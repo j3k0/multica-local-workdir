@@ -1,5 +1,5 @@
 [Unit]
-Description=Hindsight: refresh stale mental models (at most daily per model; FOV-2242)
+Description=Hindsight: refresh stale mental models (at most hourly per model; FOV-2242)
 After=network-online.target
 
 [Service]

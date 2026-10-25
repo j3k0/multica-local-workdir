@@ -120,8 +120,9 @@ into the payload or printed.
 
 ## Scheduled jobs on devbox3 (FOV-2242)
 
-- `daily-refresh.sh`: refreshes a mental model at most once a day (`MIN_AGE`,
-  default 86400 s), and only if its bank consolidated since its last refresh.
+- `daily-refresh.sh` (name predates the change): refreshes a mental model at most once an
+  hour (`MIN_AGE`, default 3000 s so each hourly run qualifies despite timer jitter; JC 2026-10-25), and only if its bank consolidated since
+  its last refresh. The cap is per model, not per conversation turn.
   At most one attempt per model per `MIN_AGE` (state in
   `~/.local/state/hindsight-refresh/`), so a queued or failing refresh isn't
   re-posted hourly. Skips while recall is failing, or if the logs can't be read.

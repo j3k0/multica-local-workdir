@@ -341,6 +341,16 @@ grep -q '^2026-10-20T00:00:00Z|gate|enforce|pass|FORGED' "$LOG" && fail "bypass 
 LWD_GATE_DONE_AGENTS=RunnerAgent g enforce issue status I done
 grep -q 'done-allowlisted.*by=RunnerAgent' "$LOG" && ok "allowlisted close names the agent" || fail "done by=" "$(tail -3 "$LOG")"
 
+# FOV-2098i (JC): only a human closes or cancels; agents may cancel duplicates
+mkissue in_progress "$FA2" agent
+g enforce issue status I cancelled; rc_is 3 "enforce: cancel without --duplicate-of refused"
+g warn issue status I cancelled; rc_is 0 "warn: plain cancel passes"; says "cancelling is a human's call" "warn: cancel advised"
+g enforce issue status I cancelled --duplicate-of FOV-1; rc_is 0 "cancel as a duplicate allowed"
+g enforce issue status I released; rc_is 3 "enforce: released refused like done"
+g enforce issue update I --status cancelled; rc_is 3 "enforce: update --status cancelled refused"
+g enforce issue create --title t --status cancelled; rc_is 3 "enforce: create --status cancelled refused"
+LWD_GATE_DONE_AGENTS=RunnerAgent g enforce issue status I cancelled; rc_is 3 "done allowlist does not cover cancel"
+
 # fail-open: a crashing gate still runs the raw command (stdin body kept)
 sed 's/^def comment_add(argv, toks):$/&\n    raise RuntimeError("boom")/' "$REPO/bin/multica-gate.py" > "$T/repo/multica-gate.py"
 g enforce issue comment add I --content hi

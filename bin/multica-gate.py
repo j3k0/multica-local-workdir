@@ -491,14 +491,18 @@ def refuse_if_closed(iss):
 
 
 # ---------------------------------------------------------- status / update --
-def status_problem(key, issue_id, has_waiting):
-    """Policy problems for a target status; None when allowed."""
-    if key == "done":
+def status_problem(key, issue_id, has_waiting, has_duplicate=False):
+    """Policy problems for a target status; None when allowed.
+    JC, FOV-2098i: only a human closes or cancels; agents may cancel duplicates."""
+    if key in ("done", "released"):
         if SELF_NAME.lower() in DONE_AGENTS:
-            say(f"done allowed for {SELF_NAME} (LWD_GATE_DONE_AGENTS)")
-            log("done-allowlisted", ["issue", "status", issue_id, "done", f"by={SELF_NAME}"])
+            say(f"{key} allowed for {SELF_NAME} (LWD_GATE_DONE_AGENTS)")
+            log("done-allowlisted", ["issue", "status", issue_id, key, f"by={SELF_NAME}"])
             return None
         return DONE_MSG.replace("<id>", issue_id)
+    if key == "cancelled" and not has_duplicate:
+        return (f"cancelling is a human's call, except a duplicate: multica issue status {issue_id} "
+                "cancelled --duplicate-of <original>; otherwise hand it over: --next-human <name>")
     if key == "blocked" and not has_waiting:
         return (f'blocked needs --waiting-on: multica issue status {issue_id} blocked '
                 '--waiting-on "<what, until when>"')
@@ -523,7 +527,7 @@ def status(argv, toks):
     waiting = nf.get("--waiting-on", [None])[0]
     if waiting is not None and key != "blocked":
         refuse("--waiting-on only goes with blocked")
-    prob = status_problem(key, issue_id, waiting is not None)
+    prob = status_problem(key, issue_id, waiting is not None, flag_value(argv, "--duplicate-of") is not None)
     if prob:
         violation(prob, argv)
     if waiting is not None:
@@ -558,6 +562,8 @@ def create(argv):
     key = flag_value(argv, "--status")
     probs = {
         "done": "closing is a human's call; create it open",
+        "released": "closing is a human's call; create it open",
+        "cancelled": "cancelling is a human's call; don't create it cancelled",
         "blocked": ("create --status blocked with an assignee queues a stray run (CLI 0.6.1); create it in "
                     'backlog, then: multica issue status <id> blocked --waiting-on "<what, until when>"'),
         "in_review": "create it, then hand off: multica issue comment add <id> --next-human <name>",

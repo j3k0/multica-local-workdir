@@ -62,8 +62,8 @@ else fail "dry-run" "rc=$rc out=$(tr '\n' ';' < "$T/out")"; fi
 # 4. static unit check: the exit-42 handoff only works under this exact name
 U="$REPO/systemd/multica-daemon.service"
 if grep -qx 'RestartForceExitStatus=42' "$U" && grep -qx 'Restart=on-failure' "$U" \
-   && grep -q '^EnvironmentFile=/' "$U" && grep -q 'exec ./multica-daemon start --foreground' "$U"; then
-  ok "unit: on-failure + exit-42 handoff + EnvironmentFile + wrapper"
+   && grep -qx 'OOMPolicy=continue' "$U" && grep -q '^EnvironmentFile=/' "$U" && grep -q 'exec ./multica-daemon start --foreground' "$U"; then
+  ok "unit: on-failure + exit-42 handoff + OOMPolicy=continue + EnvironmentFile + wrapper"
 else fail "unit static check"; fi
 if command -v systemd-analyze >/dev/null; then
   mkdir -p "$T/u" && cp "$U" "$T/u/multica-daemon.service"

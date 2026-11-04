@@ -29,6 +29,10 @@ Environment=BUN_INSTALL=/home/jeko/.bun
 Environment=LC_ALL=en_US.UTF-8
 # The tmux daemon never had these; the user manager does (empty ssh-agent).
 UnsetEnvironment=SSH_AUTH_SOCK GPG_AGENT_INFO
+# A kernel OOM kill of one process (an agent, a tool) must not stop the whole
+# unit and every run in flight (default OOMPolicy=stop; 2026-10-27, FOV-2246).
+# If the daemon itself is killed, Restart=on-failure brings it back.
+OOMPolicy=continue
 # on-failure, not always: `multica daemon stop` exits 0 and must stay stopped.
 Restart=on-failure
 RestartForceExitStatus=42

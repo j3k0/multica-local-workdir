@@ -93,7 +93,7 @@ clear_log
 run_silent 1 "$T/empty" issue status "x
 FAKE|agent|issue status <uuid> done" done
 [ "$(wc -l < "$LOG")" -eq 1 ] && ok "newline in args can't mint a fake log line" || fail "log injection" "$(wc -l < "$LOG") lines"
-grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*\|agent\|issue status' "$LOG" && ok "log line format" || fail "log head" "$(head -1 "$LOG")"
+grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*\|agent\|@[^|]*\|issue status' "$LOG" && ok "log line format" || fail "log head" "$(head -1 "$LOG")"
 
 # --- probe: value-taking flags accepted BEFORE a subcommand -----------------
 # Discovery: collect every value-taking flag ("--x string") the CLI advertises

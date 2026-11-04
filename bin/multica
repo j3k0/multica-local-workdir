@@ -96,9 +96,13 @@ if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${#_tokens[@]}" -gt 0 ]; then
     # Best-effort log for step 3: %q-quoted argv (immune to timestamp/injection
     # games), capped at 2000 chars per line so comment payloads can't bloat the
     # file. A missing log dir or failed append never breaks a run.
+    # The running agent's name is the next field (`@Name`, FOV-2098k: reviews
+    # need per-agent counts); | and newlines in it are replaced so a run can't
+    # forge fields or lines through MULTICA_AGENT_NAME.
+    _who="${MULTICA_AGENT_NAME:--}"; _who="${_who//[$'\n\r|']/_}"
     mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
     {
-      printf '%s|agent|' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      printf '%s|agent|@%s|' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_who"
       printf '%q ' "$@"
     } | cut -c 1-2000 >> "$LOG_FILE" 2>/dev/null || true
     # Step 3 (FOV-2097): hand the command to the gate. The gate carries the
@@ -129,7 +133,7 @@ if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${#_tokens[@]}" -gt 0 ]; then
         if [ "$_in_list" != "true" ]; then
           # evidence line: a bypassed run must be counted, not absent (review of FOV-2098)
           # %q-quoted like the |agent| line: a newline in argv cannot mint a fake entry
-          { printf '%s|gate|bypass|not-in-list|' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; printf '%q ' "$@" | cut -c 1-300; printf '\n'; } >> "$LOG_FILE" 2>/dev/null || true
+          { printf '%s|gate|bypass|not-in-list|@%s|' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_who"; printf '%q ' "$@" | cut -c 1-300; printf '\n'; } >> "$LOG_FILE" 2>/dev/null || true
           printf 'bin/multica: %s is not in LWD_GATE_AGENTS; no gate for this run\n' "${MULTICA_AGENT_NAME:-<unknown agent>}" >&2 || true
           exec "$real_bin" "$@"
         fi

@@ -53,6 +53,8 @@ MODE = os.environ.get("LWD_GATE_MODE") or "warn"
 LOG = os.environ.get("LWD_GATE_LOG", "")
 SELF_ID = os.environ.get("MULTICA_AGENT_ID", "")
 SELF_NAME = os.environ.get("MULTICA_AGENT_NAME", "")
+# log field: the running agent (FOV-2098k), sanitised so it can't forge fields/lines
+WHO = re.sub(r"[|\r\n]", "_", SELF_NAME) or "-"
 FORBIDDEN = {n.strip().lower() for n in os.environ.get(
     "LWD_GATE_FORBIDDEN", "Integrity,Librarian,IAPDAPM,LODAPM,TRIGAPM").split(",") if n.strip()}
 # Agents allowed to set `done` (e.g. Secretary closing on JC's recorded approve,
@@ -86,7 +88,7 @@ def log(decision, argv):
         os.makedirs(os.path.dirname(LOG), exist_ok=True)
         body = " ".join(shlex.quote(a) for a in argv).replace("\n", "\\n")[:2000]
         with open(LOG, "a") as f:
-            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}|gate|{MODE}|{decision}|{body}\n")
+            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}|gate|{MODE}|{decision}|@{WHO}|{body}\n")
     except OSError:
         pass
 
@@ -580,6 +582,20 @@ def assign(argv, toks):
         log("pass", argv)
         sys.exit(run(argv))
     issue_id = toks[2] if len(toks) > 2 else "<id>"
+    # Redundant assign (FOV-2098k review: 20 of 63 refusals): the target already
+    # owns the issue, typically right after --next/--next-human assigned it.
+    # Absorbed without calling the CLI, so it can never start a run; member
+    # names (--to <human>) aren't resolvable here and keep the normal rule.
+    target = flag_value(argv, "--to-id")
+    if target is None and flag_value(argv, "--to") is not None:
+        target = resolve_agent(flag_value(argv, "--to"), required=False)[0]
+    if target and len(toks) > 2:
+        iss = issue(issue_id)
+        if iss and iss.get("assignee_id") == target:
+            say("already assigned to that assignee; nothing to do (--next/--next-human assign it "
+                f"already). A fresh run is: multica issue rerun {issue_id}")
+            log("assign-noop", argv)
+            sys.exit(0)
     violation("assigning alone starts a run with no comment; hand off with: "
               f"multica issue comment add {issue_id} --next <agent> (or --next-human <name>)", argv)
 

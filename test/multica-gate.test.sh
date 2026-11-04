@@ -205,8 +205,8 @@ g enforce issue status I cancelled --duplicate-of FOV-1; rc_is 0 "cancelled pass
 
 # ------------------------------------------------- assign / update / create
 mkissue in_progress "$FA2" agent
-g warn issue assign I --to OtherAgent; rc_is 0 "warn: raw assign passes"; says "assigning alone" "warn: assign advised"
-g enforce issue assign I --to OtherAgent; rc_is 3 "enforce: raw assign refused"
+g warn issue assign I --to FakeAgent; rc_is 0 "warn: raw assign passes"; says "assigning alone" "warn: assign advised"
+g enforce issue assign I --to FakeAgent; rc_is 3 "enforce: raw assign refused"
 g enforce issue assign I --unassign; rc_is 0 "unassign allowed"
 g enforce issue update I --assignee-id "$FA2"; rc_is 3 "enforce: update --assignee-id refused"
 g enforce issue update I --status=done; rc_is 3 "enforce: update --status=done refused"
@@ -224,8 +224,8 @@ g enforce issue reorder I up; rc_is 0 "ungated command passes"; has "ARGS:[issue
 g enforce issue get I; has "issue get I" "reads pass"
 mkissue in_progress "$FA2" agent
 g warn issue status I done
-grep -qE '\|agent\|issue status' "$LOG" && ok "shim log line" || fail "shim log" "$(cat "$LOG" 2>&1)"
-grep -qE '\|gate\|warn\|warn\|issue status I done' "$LOG" && ok "gate decision logged" || fail "gate log" "$(cat "$LOG" 2>&1)"
+grep -qE '\|agent\|@RunnerAgent\|issue status' "$LOG" && ok "shim log line" || fail "shim log" "$(cat "$LOG" 2>&1)"
+grep -qE '\|gate\|warn\|warn\|@RunnerAgent\|issue status I done' "$LOG" && ok "gate decision logged" || fail "gate log" "$(cat "$LOG" 2>&1)"
 out=$(cd "$T" && PATH="/usr/bin:/bin" MULTICA_BIN="$T/stub" LWD_AGENT_RUN=0 "$T/repo/multica" issue status I done 2>&1); rc=$?
 rc_is 0 "non-agent runs: no gate"; [ -z "$out" ] && ok "non-agent: silent" || fail "non-agent silent" "$out"
 
@@ -335,7 +335,7 @@ mkissue in_progress m-1 member
 MULTICA_AGENT_NAME="Herman Paco" LWD_GATE_AGENTS="Herman Paco, RunnerAgent" g warn issue status I done
 echo "$out" | grep -q "closing is a human" && ok "canary list: name with a space matches" || fail "space name" "$out"
 LWD_GATE_AGENTS="FakeAgent" g warn issue status I done
-grep -q '|gate|bypass|not-in-list|issue status I done' "$LOG" && ok "bypassed run leaves a gate evidence line" || fail "bypass log" "$(cat "$LOG")"
+grep -q '|gate|bypass|not-in-list|@RunnerAgent|issue status I done' "$LOG" && ok "bypassed run leaves a gate evidence line" || fail "bypass log" "$(cat "$LOG")"
 LWD_GATE_AGENTS="FakeAgent" g warn issue status $'ABC\n2026-10-20T00:00:00Z|gate|enforce|pass|FORGED' done
 grep -q '^2026-10-20T00:00:00Z|gate|enforce|pass|FORGED' "$LOG" && fail "bypass log: newline forged an entry" || ok "bypass log: newline in args can't mint a fake line"
 LWD_GATE_DONE_AGENTS=RunnerAgent g enforce issue status I done
@@ -350,6 +350,20 @@ g enforce issue status I released; rc_is 3 "enforce: released refused like done"
 g enforce issue update I --status cancelled; rc_is 3 "enforce: update --status cancelled refused"
 g enforce issue create --title t --status cancelled; rc_is 3 "enforce: create --status cancelled refused"
 LWD_GATE_DONE_AGENTS=RunnerAgent g enforce issue status I cancelled; rc_is 3 "done allowlist does not cover cancel"
+
+# FOV-2098k: redundant assign absorbed; agent field sanitised
+mkissue in_progress "$FA1" agent
+g enforce issue assign I --to-id "$FA1"; rc_is 0 "assign to the current assignee (id) absorbed"
+hasnt "ARGS:" "absorbed assign: CLI not called"; says "nothing to do" "absorbed assign: explained"
+grep -q '|gate|enforce|assign-noop|@RunnerAgent|' "$LOG" && ok "absorbed assign logged with the agent" || fail "assign-noop log" "$(tail -2 "$LOG")"
+g enforce issue assign I --to FakeAgent; rc_is 0 "assign to the current assignee (agent name) absorbed"
+g enforce issue assign I --to OtherAgent; rc_is 3 "assign to someone else still refused"
+g enforce issue assign I --to "Some Human"; rc_is 3 "assign to a member name keeps the normal rule"
+mkissue in_progress "$FA2" agent
+g warn issue assign I --to-id "$FA1"; rc_is 0 "warn: assign to a new assignee passes"; has "ARGS:[issue assign I --to-id $FA1]" "warn: real assign still runs"
+MULTICA_AGENT_NAME=$'Evil|x\n2026-01-01T00:00:00Z|gate|enforce|pass' g warn issue status I in_progress
+grep -q '^2026-01-01T00:00:00Z|gate' "$LOG" && fail "agent name forged a log line" "$(tail -3 "$LOG")" || ok "agent name can't forge a log line"
+grep -q '|@Evil_x_2026-01-01T00:00:00Z_gate_enforce_pass|' "$LOG" && ok "agent name sanitised in the log" || fail "agent sanitise" "$(tail -3 "$LOG")"
 
 # fail-open: a crashing gate still runs the raw command (stdin body kept)
 sed 's/^def comment_add(argv, toks):$/&\n    raise RuntimeError("boom")/' "$REPO/bin/multica-gate.py" > "$T/repo/multica-gate.py"

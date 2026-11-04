@@ -593,7 +593,7 @@ def assign(argv, toks):
         iss = issue(issue_id)
         if iss and iss.get("assignee_id") == target:
             say("already assigned to that assignee; nothing to do (--next/--next-human assign it "
-                f"already). A fresh run is: multica issue rerun {issue_id}")
+                f"already). To repeat a run: multica issue rerun-task <run-id> (ids: multica issue runs {issue_id} --full-id)")
             log("assign-noop", argv)
             sys.exit(0)
     violation("assigning alone starts a run with no comment; hand off with: "

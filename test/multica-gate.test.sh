@@ -354,7 +354,7 @@ LWD_GATE_DONE_AGENTS=RunnerAgent g enforce issue status I cancelled; rc_is 3 "do
 # FOV-2098k: redundant assign absorbed; agent field sanitised
 mkissue in_progress "$FA1" agent
 g enforce issue assign I --to-id "$FA1"; rc_is 0 "assign to the current assignee (id) absorbed"
-hasnt "ARGS:" "absorbed assign: CLI not called"; says "nothing to do" "absorbed assign: explained"
+hasnt "ARGS:" "absorbed assign: CLI not called"; says "nothing to do" "absorbed assign: explained"; says "rerun-task" "absorbed assign: hint names rerun-task"
 grep -q '|gate|enforce|assign-noop|@RunnerAgent|' "$LOG" && ok "absorbed assign logged with the agent" || fail "assign-noop log" "$(tail -2 "$LOG")"
 g enforce issue assign I --to FakeAgent; rc_is 0 "assign to the current assignee (agent name) absorbed"
 g enforce issue assign I --to OtherAgent; rc_is 3 "assign to someone else still refused"

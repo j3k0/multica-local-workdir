@@ -152,6 +152,7 @@ Task settings take the **highest priority** — above per-agent (custom args / a
 - `model` resolves per backend: on the native Anthropic backend the wrapper injects `--model` (unless the caller already passed one); with a provider active the provider file consumes `LWD_MODEL` as before. Either way a `model:` label works.
 - It runs a `multica issue get` on every launch (~0.3s). Opt out with `LWD_TASK_SETTINGS=0`.
 - `provider` and `path` let issue authors source a provider script / relocate the working dir; fine for self-hosted with trusted issue authors, otherwise opt out.
+- A `path:` pointing at a folder the sandbox user `multica-sbx` can write (or one under such a folder, or holding a `CLAUDE.md`/`AGENTS.md`/`.claude`/… it can write) is **refused** and the agent starts in its default dir (`REFUSED path` in the log). The sandbox account can set labels and assign main-runtime agents, so without this it could start an unsandboxed agent in a folder of planted instructions (FOV-2510). Checked by `bin/lwd-path-guard` (symlinks resolved, POSIX ACLs honoured, fails closed); test: `bash test/path-guard.test.sh`. Same rule in the `pi` wrapper.
 
 ## Allowing project MCP servers (claude)
 

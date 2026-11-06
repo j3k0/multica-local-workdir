@@ -45,6 +45,22 @@ refused "AGENTS.md symlinked into a sbx-writable dir"  "$T/agentsln"
 allowed "AGENTS.md -> CLAUDE.md in the same safe dir"  "$T/samedir"
 refused "nonexistent path"                             "$T/nope"
 refused "a file, not a dir"                            "$T/w/planted.md"
+# Review round 1: symlinked config dirs, ancestor entries, unreadable dirs.
+mkdir -p "$T/cfgt" "$T/symcfg" "$T/symsub/.claude" "$T/cfgt2" "$T/anc/child" "$T/loop/.claude" "$T/unread/.claude/x"
+chmod 755 "$T/cfgt" "$T/symcfg" "$T/symsub" "$T/symsub/.claude" "$T/cfgt2" "$T/anc" "$T/anc/child" "$T/loop" "$T/loop/.claude" "$T/unread" "$T/unread/.claude"
+echo '{}' > "$T/cfgt/settings.json"; chmod 644 "$T/cfgt/settings.json"; setfacl -m u:nobody:rw "$T/cfgt/settings.json"
+ln -s "$T/cfgt" "$T/symcfg/.claude"
+echo x > "$T/cfgt2/SKILL.md"; chmod 644 "$T/cfgt2/SKILL.md"; setfacl -m u:nobody:rw "$T/cfgt2/SKILL.md"
+ln -s "$T/cfgt2" "$T/symsub/.claude/skills"
+echo x > "$T/anc/CLAUDE.md"; chmod 644 "$T/anc/CLAUDE.md"; setfacl -m u:nobody:rw "$T/anc/CLAUDE.md"
+ln -s "$T/loop/.claude" "$T/loop/.claude/self"
+chmod 000 "$T/unread/.claude/x"; trap 'chmod 755 "$T/unread/.claude/x"; rm -rf "$T"' EXIT
+refused "symlinked .claude holding a sbx-writable file"     "$T/symcfg"
+refused "symlinked subdir inside .claude, sbx-writable file" "$T/symsub"
+refused "sbx-writable CLAUDE.md in an ancestor"              "$T/anc/child"
+allowed "symlink loop inside .claude terminates"             "$T/loop"
+refused "unreadable dir inside .claude (fail closed)"        "$T/unread"
+
 out="$(LWD_PATH_GUARD_USER=no-such-user-fov2510 "$GUARD" "$T/w" 2>&1)" \
   && ok "no sandbox user on this host -> allowed" || fail "no sandbox user on this host" "$out"
 out="$("$GUARD" "$T/lnk/../safe" 2>&1)"

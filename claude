@@ -231,6 +231,17 @@ case "${LWD_TASK_SETTINGS:-1}" in
               if [ -n "$task_path" ] && [ ! -d "$task_path" ]; then
                 _ts_log "ignoring non-directory path '$task_path'"; task_path=""
               fi
+              # Refuse dirs the sandbox user (multica-sbx) can write: it can set
+              # labels and hand issues to us, so a path: label must not start this
+              # agent in a folder it controls (FOV-2510). Fail closed; on success
+              # use the symlink-resolved path.
+              if [ -n "$task_path" ]; then
+                if _ts_real="$("$SCRIPT_DIR/bin/lwd-path-guard" "$task_path" 2>&1)"; then
+                  task_path="$_ts_real"
+                else
+                  _ts_log "REFUSED path '$task_path': $_ts_real; using the default working dir"; task_path=""
+                fi
+              fi
               if [ -n "$task_effort$task_model$task_provider$task_path" ]; then
                 _ts_log "applied effort='$task_effort' model='$task_model' provider='$task_provider' path='$task_path'"
               fi

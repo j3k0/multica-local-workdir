@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""lwd-path-guard DIR — may a main-runtime agent start in DIR? (FOV-2510)
+
+The claude/pi wrappers honour a `path: <dir>` issue label. A sandboxed agent
+(Unix user multica-sbx) can set labels and assign main-runtime agents, so a
+label pointing at a folder the sandbox can write would make an unsandboxed
+agent load planted AGENTS.md / CLAUDE.md / .claude hooks. Refuse such dirs.
+
+Exit 0 and print the resolved real path when DIR is safe. Exit 1 with the
+reason on stderr when it is not, or when the check itself fails (fail closed:
+the wrappers then fall back to the default working dir).
+
+Refused when the sandbox user can write (by owner, POSIX ACL or mode bits):
+  - DIR itself (symlinks resolved first), or
+  - any ancestor, unless the ancestor is sticky and the child isn't the
+    sandbox user's (it can't replace it then, e.g. /tmp), or
+  - an instruction/config entry (CLAUDE.md, AGENTS.md, .claude/ and all it
+    holds, ...) inside DIR or any ancestor (both claude and pi load context
+    files from parent dirs), symlinks followed, by the same two rules. Config
+    dirs in the running user's $HOME are not walked: they load whatever the
+    cwd is, so a path: label can't bring them in.
+
+Anything unreadable fails the check (closed).
+
+LWD_PATH_GUARD_USER overrides the sandbox user (default multica-sbx); if that
+user doesn't exist on this host there is nothing to guard against.
+"""
+import errno
+import os
+import pwd
+import stat
+import struct
+import sys
+
+# Auto-loaded from the start dir or its parents by claude / pi / omp / opencode.
+INSTRUCTION_ENTRIES = ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "AGENTS.override.md",
+                       ".claude", ".pi", ".omp", ".agents", ".opencode", ".mcp.json",
+                       "opencode.json")
+NO_ACL = (errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP)
+
+MAX_ENTRIES = 5000
+
+ACL_USER_OBJ, ACL_USER, ACL_GROUP_OBJ, ACL_GROUP, ACL_MASK, ACL_OTHER = 1, 2, 4, 8, 16, 32
+
+
+def acl_entries(path):
+    """[(tag, perm, id)] from system.posix_acl_access, or None without an ACL."""
+    try:
+        raw = os.getxattr(path, "system.posix_acl_access")
+    except OSError as e:
+        if e.errno in NO_ACL:
+            return None
+        raise  # anything else: fail closed
+    return [struct.unpack_from("<HHI", raw, off) for off in range(4, len(raw), 8)]
+
+
+def writable_by(path, uid, gids):
+    """POSIX access check for write, as (uid, gids) would get it."""
+    st = os.stat(path)
+    if st.st_uid == uid:
+        return True  # the owner can chmod its way in anyway
+    acl = acl_entries(path)
+    if acl is None:
+        if st.st_gid in gids:
+            return bool(st.st_mode & stat.S_IWGRP)
+        return bool(st.st_mode & stat.S_IWOTH)
+    mask = next((p for t, p, _ in acl if t == ACL_MASK), 7)
+    for t, p, i in acl:
+        if t == ACL_USER and i == uid:
+            return bool(p & mask & 2)
+    groups = [p for t, p, i in acl
+              if (t == ACL_GROUP_OBJ and st.st_gid in gids) or (t == ACL_GROUP and i in gids)]
+    if groups:
+        return any(p & mask & 2 for p in groups)
+    return any(p & 2 for t, p, _ in acl if t == ACL_OTHER)
+
+
+def hazard(path, uid, gids):
+    """Reason string if the sandbox user can write `path` (a real path) or
+    replace it through an ancestor, else None."""
+    if writable_by(path, uid, gids):
+        return f"{path} is writable by the sandbox user"
+    child = path
+    while child != "/":
+        parent = os.path.dirname(child)
+        pst, cst = os.stat(parent), os.lstat(child)
+        sticky_safe = pst.st_mode & stat.S_ISVTX and cst.st_uid != uid and pst.st_uid != uid
+        if not sticky_safe and writable_by(parent, uid, gids):
+            return f"{path} sits under {parent}, which is writable by the sandbox user"
+        child = parent
+    return None
+
+
+def entries_hazard(base, uid, gids, walk, state):
+    """Reason string if an instruction/config entry in `base` (or, when `walk`,
+    anything below it, through symlinks) is sandbox-plantable, else None."""
+    for name in INSTRUCTION_ENTRIES:
+        entry = os.path.join(base, name)
+        if not os.path.lexists(entry):
+            continue
+        todo = [entry]
+        while todo:
+            e = todo.pop()
+            state["n"] += 1
+            if state["n"] > MAX_ENTRIES:
+                raise RuntimeError(f"more than {MAX_ENTRIES} instruction/config entries to check")
+            real = os.path.realpath(e, strict=True)
+            reason = hazard(real, uid, gids)
+            if reason:
+                return f"{e}: {reason}"
+            if walk and os.path.isdir(real) and real not in state["seen"]:
+                state["seen"].add(real)
+                with os.scandir(real) as it:  # errors propagate: fail closed
+                    todo += [os.path.join(e, x.name) for x in it]
+    return None
+
+
+def check(path, uid, gids):
+    """Reason string if the sandbox user could plant files the agent loads, else None."""
+    reason = hazard(path, uid, gids)
+    if reason:
+        return reason
+    home = os.path.realpath(os.path.expanduser("~"))
+    state = {"n": 0, "seen": set()}
+    d = path
+    while True:
+        reason = entries_hazard(d, uid, gids, d != home, state)
+        if reason:
+            return reason
+        if d == "/":
+            return None
+        d = os.path.dirname(d)
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("usage: lwd-path-guard DIR", file=sys.stderr)
+        return 2
+    user = os.environ.get("LWD_PATH_GUARD_USER") or "multica-sbx"
+    try:
+        real = os.path.realpath(sys.argv[1], strict=True)
+        if not os.path.isdir(real):
+            print(f"{real} is not a directory", file=sys.stderr)
+            return 1
+        try:
+            pw = pwd.getpwnam(user)
+        except KeyError:
+            print(real)  # no sandbox user on this host
+            return 0
+        gids = set(os.getgrouplist(user, pw.pw_gid))
+        reason = check(real, pw.pw_uid, gids)
+    except Exception as e:  # fail closed
+        print(f"check failed: {e}", file=sys.stderr)
+        return 1
+    if reason:
+        print(reason, file=sys.stderr)
+        return 1
+    print(real)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

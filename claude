@@ -236,11 +236,14 @@ case "${LWD_TASK_SETTINGS:-1}" in
               # agent in a folder it controls (FOV-2510). Fail closed; on success
               # use the symlink-resolved path.
               if [ -n "$task_path" ]; then
-                if _ts_real="$("$SCRIPT_DIR/bin/lwd-path-guard" "$task_path" 2>&1)"; then
+                # stdout only is the path; stderr (the reason) goes to a temp file for the log
+                _ts_err="$(mktemp)"
+                if _ts_real="$("$SCRIPT_DIR/bin/lwd-path-guard" "$task_path" 2>"$_ts_err")"; then
                   task_path="$_ts_real"
                 else
-                  _ts_log "REFUSED path '$task_path': $_ts_real; using the default working dir"; task_path=""
+                  _ts_log "REFUSED path '$task_path': $(head -c 500 "$_ts_err" 2>/dev/null | tr '\n' ' '); using the default working dir"; task_path=""
                 fi
+                rm -f "$_ts_err"
               fi
               if [ -n "$task_effort$task_model$task_provider$task_path" ]; then
                 _ts_log "applied effort='$task_effort' model='$task_model' provider='$task_provider' path='$task_path'"

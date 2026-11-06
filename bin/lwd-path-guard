@@ -19,6 +19,9 @@ Refused when the sandbox user can write (by owner, POSIX ACL or mode bits):
     files from parent dirs), symlinks followed, by the same two rules. Config
     dirs in the running user's $HOME are not walked: they load whatever the
     cwd is, so a path: label can't bring them in.
+  - .git, .git/config, .git/hooks or an entry directly in .git/hooks, in DIR
+    or any ancestor (git runs them for the agent's commits). Not walked deeper:
+    a big repo would hit MAX_ENTRIES.
 
 Anything unreadable fails the check (closed).
 
@@ -115,6 +118,30 @@ def entries_hazard(base, uid, gids, walk, state):
     return None
 
 
+def git_hazard(base, uid, gids, state):
+    """Reason string if the sandbox user can plant a git hook/config in
+    `base`/.git (just .git, .git/config, .git/hooks and its direct entries)."""
+    git = os.path.join(base, ".git")
+    if not os.path.lexists(git):
+        return None
+    todo = [git, os.path.join(git, "config"), os.path.join(git, "hooks")]
+    while todo:
+        e = todo.pop()
+        if not os.path.lexists(e):
+            continue
+        state["n"] += 1
+        if state["n"] > MAX_ENTRIES:
+            raise RuntimeError(f"more than {MAX_ENTRIES} instruction/config entries to check")
+        real = os.path.realpath(e, strict=True)
+        reason = hazard(real, uid, gids)
+        if reason:
+            return f"{e}: {reason}"
+        if e == os.path.join(git, "hooks") and os.path.isdir(real):
+            with os.scandir(real) as it:  # errors propagate: fail closed
+                todo += [os.path.join(e, x.name) for x in it]
+    return None
+
+
 def check(path, uid, gids):
     """Reason string if the sandbox user could plant files the agent loads, else None."""
     reason = hazard(path, uid, gids)
@@ -124,7 +151,7 @@ def check(path, uid, gids):
     state = {"n": 0, "seen": set()}
     d = path
     while True:
-        reason = entries_hazard(d, uid, gids, d != home, state)
+        reason = entries_hazard(d, uid, gids, d != home, state) or git_hazard(d, uid, gids, state)
         if reason:
             return reason
         if d == "/":

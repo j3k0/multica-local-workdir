@@ -54,13 +54,38 @@ echo x > "$T/cfgt2/SKILL.md"; chmod 644 "$T/cfgt2/SKILL.md"; setfacl -m u:nobody
 ln -s "$T/cfgt2" "$T/symsub/.claude/skills"
 echo x > "$T/anc/CLAUDE.md"; chmod 644 "$T/anc/CLAUDE.md"; setfacl -m u:nobody:rw "$T/anc/CLAUDE.md"
 ln -s "$T/loop/.claude" "$T/loop/.claude/self"
-chmod 000 "$T/unread/.claude/x"; trap 'chmod 755 "$T/unread/.claude/x"; rm -rf "$T"' EXIT
+[ "$(id -u)" != 0 ] && chmod 000 "$T/unread/.claude/x"  # root reads anything: nothing to test
+trap 'chmod 755 "$T/unread/.claude/x"; rm -rf "$T"' EXIT
 refused "symlinked .claude holding a sbx-writable file"     "$T/symcfg"
 refused "symlinked subdir inside .claude, sbx-writable file" "$T/symsub"
 refused "sbx-writable CLAUDE.md in an ancestor"              "$T/anc/child"
 allowed "symlink loop inside .claude terminates"             "$T/loop"
-refused "unreadable dir inside .claude (fail closed)"        "$T/unread"
+if [ "$(id -u)" = 0 ]; then echo "skip: unreadable dir test (running as root)"
+else refused "unreadable dir inside .claude (fail closed)"        "$T/unread"; fi
+# FOV-2511: .git, .git/config, .git/hooks and its direct entries.
+for g in safe dotgit cfg hooks hook anc; do
+  mkdir -p "$T/g-$g/.git/hooks" "$T/g-$g/child"; chmod 755 "$T/g-$g" "$T/g-$g/.git" "$T/g-$g/.git/hooks" "$T/g-$g/child"
+  echo x > "$T/g-$g/.git/config"; echo x > "$T/g-$g/.git/hooks/pre-commit"; echo x > "$T/g-$g/.git/HEAD"
+  chmod 644 "$T/g-$g/.git/config" "$T/g-$g/.git/hooks/pre-commit" "$T/g-$g/.git/HEAD"
+done
+setfacl -m u:nobody:rwx "$T/g-dotgit/.git"
+setfacl -m u:nobody:rw  "$T/g-cfg/.git/config"
+setfacl -m u:nobody:rwx "$T/g-hooks/.git/hooks"
+setfacl -m u:nobody:rw  "$T/g-hook/.git/hooks/pre-commit"
+setfacl -m u:nobody:rw  "$T/g-anc/.git/hooks/pre-commit"
+allowed "repo with a sbx-readonly .git"                   "$T/g-safe"
+refused ".git itself sbx-writable"                        "$T/g-dotgit"
+refused ".git/config sbx-writable"                        "$T/g-cfg"
+refused ".git/hooks sbx-writable"                         "$T/g-hooks"
+refused "a file in .git/hooks sbx-writable"               "$T/g-hook"
+refused "sbx-writable hook in an ancestor repo"           "$T/g-anc/child"
+# .git/HEAD is deliberately not checked (no recursive walk of .git).
+setfacl -m u:nobody:rw "$T/g-safe/.git/HEAD"
+allowed ".git/HEAD sbx-writable is out of scope"          "$T/g-safe"
 
+# stdout carries only the path, even when python warns on stderr (FOV-2511).
+out="$(PYTHONWARNINGS=always PYTHONDEVMODE=1 "$GUARD" "$T/safe" 2>/dev/null)"
+[ "$out" = "$T/safe" ] && ok "stdout is only the resolved path" || fail "stdout is only the path" "$out"
 out="$(LWD_PATH_GUARD_USER=no-such-user-fov2510 "$GUARD" "$T/w" 2>&1)" \
   && ok "no sandbox user on this host -> allowed" || fail "no sandbox user on this host" "$out"
 out="$("$GUARD" "$T/lnk/../safe" 2>&1)"
@@ -101,6 +126,16 @@ if command -v jq >/dev/null; then
   done
   grep -q "REFUSED path '$T/w'" "$T/logs/claude.log" "$T/logs/pi.log" 2>/dev/null \
     && ok "refusal is logged" || fail "refusal is logged" "$(cat "$T"/logs/*.log 2>/dev/null | tail -3)"
+  # A stray warning on the guard's stderr must not end up in the working dir (FOV-2511).
+  cp "$W/bin/lwd-path-guard" "$T/guard.real"
+  printf '#!/bin/bash\necho "DeprecationWarning: stray" >&2\nexec "%s" "$@"\n' "$T/guard.real" > "$W/bin/lwd-path-guard"
+  for w in claude pi; do
+    got="$(wrapper_pwd "$w" "$T/safe")"
+    [ "$got" = "$T/safe" ] && ok "$w: guard stderr is not captured into the path" || fail "$w: guard stderr leaked" "pwd=$got"
+  done
+  grep -q "REFUSED path '$T/w': .*writable by the sandbox user" "$T/logs/claude.log" 2>/dev/null \
+    && ok "refusal log still carries the reason" || fail "refusal reason in log" "$(tail -3 "$T/logs/claude.log" 2>/dev/null)"
+  cp "$T/guard.real" "$W/bin/lwd-path-guard"
 else
   echo "skip C: jq not installed (the wrappers skip task settings without it)"
 fi

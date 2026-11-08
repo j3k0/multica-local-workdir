@@ -296,3 +296,5 @@ sudo cp -p /etc/default/earlyoom.pre-fov2442 /etc/default/earlyoom
 sudo systemctl daemon-reload
 sudo systemctl restart earlyoom
 ```
+
+The live manager stays at -100 until the reboot; to revert it now: `sudo choom -n 100 -p $(systemctl show -p MainPID --value user@1000.service)`.

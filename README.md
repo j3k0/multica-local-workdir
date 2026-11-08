@@ -255,3 +255,13 @@ Tuning: `--interval SECONDS`, `--idle-checks N`, `--runtime-id ID` (repeatable o
 ## Run the daemon under systemd
 
 `systemd/multica-daemon.service` starts the daemon at boot (user unit; needs linger). Keep the unit name: on a CLI self-update the daemon detects `multica-daemon.service` and exits 42, which `RestartForceExitStatus=42` turns into a restart on the new binary. It needs an untracked `daemon.env` (0600, plain `KEY=VALUE`) holding the login-shell secrets the daemon would otherwise inherit, and sources `~/.config/pi/env`; see the comments in the unit.
+
+
+## devbox3 OOM safety net (root, FOV-2442)
+
+`systemd/host/` holds two root-owned host files (devbox3 has no config repo, so they live here next to the daemon unit):
+
+- `user@1000.service.d/oom.conf` → `/etc/systemd/system/user@1000.service.d/oom.conf`: user manager at `OOMScoreAdjust=-100`, its services at 0 instead of 200, so the kernel no longer kills the manager (and every user service with it) before large processes.
+- `earlyoom.default` → `/etc/default/earlyoom`: `--prefer` no longer lists `node|python`, which matched our own agent stack and made earlyoom kill small processes ahead of the real hog.
+
+Apply: `sudo install` both, `sudo systemctl daemon-reload`, `sudo systemctl restart earlyoom`. The drop-in takes full effect at the next boot; until then lower the live values with `choom` (manager to -100, its 200-valued service processes to 0). `bash test/host-oom.test.sh` checks both files.

@@ -1,0 +1,27 @@
+# Default settings for earlyoom. This file is sourced by /bin/sh from
+# /etc/init.d/earlyoom or by systemd from earlyoom.service.
+
+# Options to pass to earlyoom
+# devbox3 (FOV-2442). Install: /etc/default/earlyoom, then systemctl restart earlyoom.
+# --prefer adds +300 to the score, far more than size: with node|python in it,
+# earlyoom killed meridian, MCP servers and tiny python test drivers while the
+# 22 GB of `runq` children (2026-10-30) and a 6.4 GB uvicorn (2026-10-27) kept
+# growing. node/python are also our own agent stack (pi, meridian, litellm), so
+# they are no longer preferred and the largest process wins on size again.
+EARLYOOM_ARGS="-r 3600 -m 5 -s 10 --avoid (^|/)(sshd|systemd|init|omp)$ --prefer (^|/)(jest|next-server|java|mysqld)$"
+
+# Examples:
+
+# Print memory report every minute instead of every hour
+# EARLYOOM_ARGS="-r 60"
+
+# Available minimum memory 5%
+# EARLYOOM_ARGS="-m 5"
+
+# Available minimum memory 15% and free minimum swap 5%
+# EARLYOOM_ARGS="-m 15 -s 5"
+
+# Avoid killing processes whose name matches this regexp
+# EARLYOOM_ARGS="--avoid '(^|/)(init|X|sshd|firefox)$'"
+
+# See more at `earlyoom -h'

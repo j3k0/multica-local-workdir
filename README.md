@@ -255,3 +255,46 @@ Tuning: `--interval SECONDS`, `--idle-checks N`, `--runtime-id ID` (repeatable o
 ## Run the daemon under systemd
 
 `systemd/multica-daemon.service` starts the daemon at boot (user unit; needs linger). Keep the unit name: on a CLI self-update the daemon detects `multica-daemon.service` and exits 42, which `RestartForceExitStatus=42` turns into a restart on the new binary. It needs an untracked `daemon.env` (0600, plain `KEY=VALUE`) holding the login-shell secrets the daemon would otherwise inherit, and sources `~/.config/pi/env`; see the comments in the unit.
+
+## devbox3 OOM safety net (root, FOV-2442)
+
+`systemd/host/` holds two root-owned host files (devbox3 has no config repo, so they live here next to the daemon unit):
+
+- `user@1000.service.d/oom.conf` → `/etc/systemd/system/user@1000.service.d/oom.conf`: user manager at `OOMScoreAdjust=-100`, its services at 0 instead of 200, so the kernel no longer kills the manager (and every user service with it) before large processes.
+- `earlyoom.default` → `/etc/default/earlyoom`: `--prefer` no longer lists `node|python`, which matched our own agent stack and made earlyoom kill small processes ahead of the real hog.
+
+`bash test/host-oom.test.sh` checks both files (touches nothing on the host).
+
+Apply:
+
+```bash
+sudo cp -p /etc/default/earlyoom /etc/default/earlyoom.pre-fov2442
+sudo install -D -m 0644 systemd/host/user@1000.service.d/oom.conf /etc/systemd/system/user@1000.service.d/oom.conf
+sudo install -D -m 0644 systemd/host/earlyoom.default /etc/default/earlyoom
+sudo systemctl daemon-reload
+sudo systemctl restart earlyoom
+```
+
+The drop-in fully applies at the next boot. Until then, lower the live values with `choom`: the manager to -100, and its service processes at 200 to 0. Any user service started or restarted before the reboot (including the multica daemon's idle restart) still gets 200. On 2026-11-08 those were `multica-daemon.service` (the daemon, its children and the `multica-sbx` python3 workers), `dbus.service`, `syncthing.service`, `runq-day.service` and `quota-page.service`. `meridian.service` sets `OOMScoreAdjust=100` itself and stays at 100 on purpose (earlyoom's SIGTERM restarts it; see its unit).
+
+Verify after apply, and again after the reboot:
+
+```bash
+journalctl -u earlyoom -b | grep -m1 -- --prefer          # the new --prefer
+cat /proc/$(systemctl show -p MainPID --value user@1000.service)/oom_score_adj   # -100
+for f in /proc/[0-9]*/oom_score_adj; do echo "$(cat $f 2>/dev/null) ${f%/oom_score_adj}"; done \
+  | awk '$1==200||$1==-100' | sort | uniq -c -w4      # count at 200 (0 after reboot) and at -100
+```
+
+After the reboot, anything at -100 other than the manager inherited it from a fork; list them with `ps -o pid,comm,cgroup` and decide case by case.
+
+Rollback:
+
+```bash
+sudo rm /etc/systemd/system/user@1000.service.d/oom.conf
+sudo cp -p /etc/default/earlyoom.pre-fov2442 /etc/default/earlyoom
+sudo systemctl daemon-reload
+sudo systemctl restart earlyoom
+```
+
+The live manager stays at -100 until the reboot; to revert it now: `sudo choom -n 100 -p $(systemctl show -p MainPID --value user@1000.service)`.

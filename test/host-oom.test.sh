@@ -23,12 +23,13 @@ for n in node python python3 litellm multica meridian pi bun; do
   printf '%s' "$n" | grep -qE "$prefer" && bad="$bad $n"
 done
 [ -z "$bad" ] && ok "earlyoom --prefer spares the agent stack" || fail "earlyoom --prefer matches:$bad"
+lost=""
 for n in sshd systemd; do
-  printf '%s' "$n" | grep -qE "$avoid" || fail "earlyoom --avoid lost $n"
+  printf '%s' "$n" | grep -qE "$avoid" || lost="$lost $n"
 done
-ok "earlyoom --avoid keeps sshd/systemd"
+[ -z "$lost" ] && ok "earlyoom --avoid keeps sshd/systemd" || fail "earlyoom --avoid lost:$lost"
 
-# 3. earlyoom accepts the args (dry run; exits on its own after 2 s)
+# 3. earlyoom accepts the args (dry run; `timeout` kills it after 2 s, so rc 124 = it kept running = pass)
 if command -v earlyoom >/dev/null; then
   # shellcheck disable=SC2086
   out="$(timeout 2 earlyoom $args --dryrun 2>&1)"; rc=$?

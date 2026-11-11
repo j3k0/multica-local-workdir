@@ -362,10 +362,19 @@ def comment_add(argv, toks):
         if mentions:
             refuse("--no-next-actor contradicts the agent mention in the body")
         iss = issue(issue_id)
-        if iss and iss.get("status") not in FINISHED:
-            refuse(f"--no-next-actor needs the issue in {'/'.join(sorted(FINISHED))} "
-                   f"(it is {iss.get('status')}). Order: first `multica issue status {issue_id} in_review` (or done), "
-                   f"then this comment; or hand finished work to a human instead: --next-human <name>")
+        # Finished, or parked on a recorded trigger (blocked + waiting_on): nobody
+        # acts until it fires (JC, FOV-2098m). The plain line passes in any status.
+        parked = iss and iss.get("status") == "blocked" and waiting_of(iss)
+        if iss and iss.get("status") not in FINISHED and not parked:
+            if iss.get("assignee_type") == "member":
+                how = f"Order: first `multica issue status {issue_id} in_review` (or done), then this comment."
+            else:
+                # in_review on an issue no human owns claims a human's turn (FOV-2098 review #2)
+                how = "Finished work goes to a human: --next-human <name> (assigns them, sets in_review)."
+            refuse(f"--no-next-actor needs the issue finished ({'/'.join(sorted(FINISHED))}) or parked "
+                   f"(blocked with waiting_on); it is {iss.get('status')}. {how} To park it: multica issue "
+                   f'status {issue_id} blocked --waiting-on "<what, until when>", then this comment. '
+                   f"A note mid-work: --progress")
         body = (body or "").rstrip("\n")
         # --content values get the CLI's \n escape decoded; other bodies are verbatim
         nl = "\\n" if src == "content" else "\n"

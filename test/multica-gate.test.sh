@@ -166,7 +166,18 @@ g warn issue comment add I --content hi --waiting-on x;            rc_is 3 "--wa
 # ------------------------------------------------------- --no-next-actor ---
 mkissue in_progress "$FA2" agent
 g warn issue comment add I --content note --no-next-actor; rc_is 3 "--no-next-actor on unfinished issue refused"
-says "first \`multica issue status I in_review\`" "--no-next-actor refusal names the order (status first)"
+says "Finished work goes to a human: --next-human" "--no-next-actor refusal, agent owns it: points to --next-human"
+echo "$out" | grep -qF "issue status I in_review" && fail "agent-owned: in_review advised" "$out" || ok "agent-owned: no in_review advice"
+says "status I blocked --waiting-on" "--no-next-actor refusal says how to park"
+mkissue in_progress m-1 member
+g warn issue comment add I --content note --no-next-actor; rc_is 3 "--no-next-actor on unfinished, human-owned issue refused"
+says "first \`multica issue status I in_review\`" "--no-next-actor refusal, human owns it: status first"
+# FOV-2098m (JC): parked = blocked with waiting_on; nobody acts until the trigger
+mkissue blocked "$FA2" agent "wakeup 2026-12-01"
+g enforce issue comment add I --content parked --no-next-actor; rc_is 0 "--no-next-actor on a parked issue passes"
+has 'ARGS:[issue comment add I --content parked\nNo next actor.]' "parked: line appended"
+mkissue blocked "$FA2" agent
+g enforce issue comment add I --content x --no-next-actor; rc_is 3 "--no-next-actor on blocked without waiting_on refused"
 mkissue in_review "$FA2" member
 g enforce issue comment add I --content "wrapped up" --no-next-actor
 rc_is 0 "--no-next-actor on in_review"
@@ -368,7 +379,9 @@ grep -q '^2026-01-01T00:00:00Z|gate' "$LOG" && fail "agent name forged a log lin
 grep -q '|@Evil_x_2026-01-01T00:00:00Z_gate_enforce_pass|' "$LOG" && ok "agent name sanitised in the log" || fail "agent sanitise" "$(tail -3 "$LOG")"
 
 # fail-open: a crashing gate still runs the raw command (stdin body kept)
-sed 's/^def comment_add(argv, toks):$/&\n    raise RuntimeError("boom")/' "$REPO/bin/multica-gate.py" > "$T/repo/multica-gate.py"
+# python, not sed: BSD sed (macOS, gravity) has no \n in replacements
+python3 -c 'import sys; s = open(sys.argv[1]).read(); d = "def comment_add(argv, toks):\n"; sys.stdout.write(s.replace(d, d + "    raise RuntimeError(\"boom\")\n", 1))' \
+  "$REPO/bin/multica-gate.py" > "$T/repo/multica-gate.py"
 g enforce issue comment add I --content hi
 rc_is 0 "gate crash: raw command still runs"; says "internal error" "gate crash: reported"
 has "ARGS:[issue comment add I --content hi]" "gate crash: argv intact"

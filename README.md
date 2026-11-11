@@ -70,7 +70,8 @@ is refused in both modes; on gated commands argv may also be normalised
   then `in_review` — or `blocked` when combined with `--waiting-on "<what,
   until when>"` (which also sets the `waiting_on` metadata key).
 - `--no-next-actor` — appends the literal line `No next actor.`; only valid
-  when the issue is already finished (in_review/done/released/cancelled).
+  when the issue is already finished (in_review/done/released/cancelled) or
+  parked: `blocked` with `waiting_on` set (FOV-2098m).
 - `--progress` — a mid-run note; mentions nobody. Refused if the body carries
   a mention (a mention dispatches a paid run).
 - `issue status <id> blocked --waiting-on "..."` — sets `waiting_on`

@@ -84,8 +84,10 @@ command -v python3 >/dev/null 2>&1 && note "ok  python3" || fail="$fail
   python3 not on PATH (gate unreach; shim fails open)"
 
 # --- 4: shim end-to-end passthrough ----------------------------------------
+# GNU timeout when present; macOS (gravity) has none, and stdin is closed anyway.
+_to=""; command -v timeout >/dev/null 2>&1 && _to="timeout 60"
 shim_out="$(cd "$SCRIPT_DIR" && PATH="$SCRIPT_DIR/bin:$PATH" LWD_AGENT_RUN=1 \
-  timeout 60 "$SCRIPT_DIR/bin/multica" --help </dev/null 2>&1)"
+  ${_to:-} "$SCRIPT_DIR/bin/multica" --help </dev/null 2>&1)"
 rc=$?
 [ $rc -eq 0 ] && note "ok  shim passthrough (--help via bin/multica)" \
   || { fail="$fail

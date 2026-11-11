@@ -104,6 +104,7 @@ if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${#_tokens[@]}" -gt 0 ]; then
     {
       printf '%s|agent|@%s|' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_who"
       printf '%q ' "$@"
+      printf '\n'   # explicit: BSD cut (macOS) doesn't terminate the last line
     } | cut -c 1-2000 >> "$LOG_FILE" 2>/dev/null || true
     # Step 3 (FOV-2097): hand the command to the gate. The gate carries the
     # real binary and log path via env so argv stays untouched; it execs the

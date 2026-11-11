@@ -99,6 +99,9 @@ if [ "${1:-}" != "--no-tests" ]; then
   bash "$SCRIPT_DIR/test/multica-shim.test.sh" </dev/null >/dev/null 2>&1 \
     && note "ok  shim test suite" || fail="$fail
   bin/multica: test/multica-shim.test.sh FAILED — do not leave this deploy in"
+  bash "$SCRIPT_DIR/test/cli-path.test.sh" </dev/null >/dev/null 2>&1 \
+    && note "ok  MULTICA_CLI_PATH test suite" || fail="$fail
+  wrappers: test/cli-path.test.sh FAILED — \"\$MULTICA_CLI_PATH\" may skip the gate"
 fi
 
 # --- report (and page, best effort) -----------------------------------------

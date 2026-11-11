@@ -31,6 +31,15 @@ unset _lwd_gate_agents _a _lwd_list
 if [ "$_lwd_shim_on" = true ]; then
   PATH="$SCRIPT_DIR/bin:$PATH"
   export LWD_AGENT_RUN=1
+  # Multica >=0.8 tells agents to run "$MULTICA_CLI_PATH" (the daemon's own
+  # CLI, by absolute path) instead of PATH's `multica`, which skips the shim
+  # (FOV-2098 review #2: ~40% of canary comments, 2026-11-09..11). Point it at
+  # the shim, and give the shim the daemon's CLI as its real binary.
+  if [ -n "${MULTICA_CLI_PATH:-}" ] && [ -x "$SCRIPT_DIR/bin/multica" ] \
+     && [ ! "$MULTICA_CLI_PATH" -ef "$SCRIPT_DIR/bin/multica" ]; then
+    [ -n "${MULTICA_BIN:-}" ] || export MULTICA_BIN="$MULTICA_CLI_PATH"
+    export MULTICA_CLI_PATH="$SCRIPT_DIR/bin/multica"
+  fi
 else
   unset LWD_AGENT_RUN
 fi

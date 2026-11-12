@@ -91,6 +91,12 @@ Policy on plain commands:
   `--unassign` pass: neither starts a run).
 - `issue create --status done|in_review`, or `blocked` with an assignee —
   refused (create it, then set the status the right way).
+- `issue create` of a release issue for a product with a Release Captain
+  (FOV-2476: triominos-server `TS:`/`TP:`, triominos-client `TRI:`/`TC:`,
+  Leekha Android `LO:`, iaptic billing `IB:`; title tests in
+  `RELEASE_PRODUCTS`) — refused unless the caller is that product's RC. The
+  message names the open standing issue (metadata `release_product=<product>`)
+  and says to mention the RC there with the PR and rollout notes (FOV-2479).
 - Forbidden-to-dispatch agents (`Integrity`, `Librarian`, the three APMs;
   override with `LWD_GATE_FORBIDDEN`) can neither be `--next`-ed/mentioned as
   the next actor, nor dispatch agents themselves.

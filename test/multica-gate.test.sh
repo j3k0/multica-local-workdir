@@ -38,6 +38,7 @@ cat > "$T/stub" <<'EOF'
 if [ -n "$STUB_FAIL" ] && [[ "$*" == *"$STUB_FAIL"* ]] || { [ -n "${STUB_FAIL2:-}" ] && [[ "$*" == *"$STUB_FAIL2"* ]]; }; then echo "FAILED:$*" >> "$STUB_CALLS"; echo "stub: forced failure" >&2; exit 1; fi
 if [ "$1 $2" = "agent list" ]; then echo "agent list" >> "$STUB_CALLS"; cat "$STUB_AGENTS"; exit 0; fi
 if [ "$1 $2" = "issue get" ]; then echo "$*" >> "$STUB_CALLS"; cat "$STUB_ISSUE"; exit 0; fi
+if [ "$1 $2" = "issue list" ]; then echo "$*" >> "$STUB_CALLS"; cat "$STUB_LIST" 2>/dev/null || echo '{"issues":[]}'; exit 0; fi
 if [ "$1 $2 $3" = "issue comment list" ]; then echo "$*" >> "$STUB_CALLS"; cat "$STUB_COMMENTS" 2>/dev/null || echo "[]"; exit 0; fi
 case "$*" in *--no-start*|"issue metadata"*) echo "$*" >> "$STUB_CALLS"; exit 0;; esac
 echo "ARGS:[$*]" >> "$STUB_CALLS"
@@ -377,6 +378,57 @@ g warn issue assign I --to-id "$FA1"; rc_is 0 "warn: assign to a new assignee pa
 MULTICA_AGENT_NAME=$'Evil|x\n2026-01-01T00:00:00Z|gate|enforce|pass' g warn issue status I in_progress
 grep -q '^2026-01-01T00:00:00Z|gate' "$LOG" && fail "agent name forged a log line" "$(tail -3 "$LOG")" || ok "agent name can't forge a log line"
 grep -q '|@Evil_x_2026-01-01T00:00:00Z_gate_enforce_pass|' "$LOG" && ok "agent name sanitised in the log" || fail "agent sanitise" "$(tail -3 "$LOG")"
+
+# FOV-2479: release issues of a product with a Release Captain are the RC's
+TRIRC=7b9e8394-a576-46c9-bd1a-7b2a9a8421f7; LORC=1c2ec592-ca35-45b8-a1da-4f316f01f726
+IBRC=e9bd346a-4f5b-4d62-9b5b-8571bf896e7a
+printf '{"issues":[{"identifier":"FOV-9","status":"done"},{"identifier":"FOV-10","status":"blocked"}]}\n' > "$T/list.json"
+rel_cases=(
+  "$TRIRC|TS: release v2.14.0 — push fixes"
+  "$TRIRC|TP: Deploy triominos-server v2.7.0 to tripster"
+  "$TRIRC|TS: Ship v2.0.4 with FOV-554"
+  "$TRIRC|TRI: Release 1.18.38"
+  "$TRIRC|TC: release triominos-1.18.38"
+  "$LORC|LO: release android-v1.2.4+840"
+  "$LORC|LO: ship android-v1.2.4"
+  "$IBRC|IB: release v3.18.0 — batch"
+  "$IBRC|IB: deploy v3.17.2 to prod"
+  "$IBRC|IB: Next release — merge queue"
+)
+for c in "${rel_cases[@]}"; do
+  rc_id="${c%%|*}"; title="${c#*|}"
+  STUB_LIST="$T/list.json" g enforce issue create --title "$title"; rc_is 3 "enforce: release issue refused: $title"
+  STUB_LIST="$T/list.json" g warn issue create --title "$title"; rc_is 0 "warn: release issue passes with advice: $title"
+  MULTICA_AGENT_ID="$rc_id" g enforce issue create --title "$title"; rc_is 0 "its RC may open it: $title"
+  has "ARGS:[issue create --title $title]" "RC create: argv intact: $title"
+done
+STUB_LIST="$T/list.json" g enforce issue create --title "TRI: Release 1.18.38"
+says "standing release issue FOV-10," "refusal names the open standing issue only"
+says "[@TRIDRelease](mention://agent/$TRIRC)" "refusal gives the RC mention"
+has "issue list --metadata release_product=triominos-client --limit 20 --output json --fields identifier,status" "standing issue looked up by marker"
+g enforce issue create --title "LO: release android-v1.2.4"
+says "No release issue is open" "no standing issue: refusal says so"
+MULTICA_AGENT_ID="$LORC" g enforce issue create --title "TRI: Release 1.18.38"; rc_is 3 "another product's RC is refused"
+# Triominos client releases are trains (release 1.N, no patch number; SACompliance review of PR #8)
+for title in "TC: release 1.19" "TC: Release 1.19 train" "TC: release 1.19 — hotfix" "TRI: Release 1.19"; do
+  g enforce issue create --title "$title"; rc_is 3 "enforce: train title refused: $title"
+  MULTICA_AGENT_ID="$TRIRC" g enforce issue create --title "$title"; rc_is 0 "train title allowed for its RC: $title"
+done
+g enforce issue create --title "TC: release 1.19x notes"; rc_is 0 "train test needs a word boundary"
+# a failed standing-issue lookup is not "none open"
+STUB_FAIL="release_product" g enforce issue create --title "TRI: Release 1.18.38"
+rc_is 3 "failed lookup: still refused"; says "Couldn't look up the standing release issue: ask TRIDRelease" "failed lookup: says so"
+echo "$out" | grep -qF "No release issue is open" && fail "failed lookup must not claim none open" "$out" || ok "failed lookup: no 'none open' claim"
+# --flag=value form is normalised before the rule runs (reviewer finding, PR #8)
+g enforce issue create --title="TRI: Release 1.18.38"; rc_is 3 "enforce: --title=<value> form refused too"
+g enforce "issue" create "--title=LO: release android-v1.2.4"; rc_is 3 "enforce: --title=<value> (LO) refused"
+g enforce issue create --title="TC: Release workflow hardening"; rc_is 0 "--title=<value> negative passes"
+for title in "TC: 1.18.29 beta upload" "TC: Release workflow hardening" "TS: release boot smoke + supervisor test" \
+    "TRI: Release Captain role and daily look" "IB: v3.17 security pass follow-ups" "IB: hotfix v3.14.8 — backport" \
+    "IB: events-view rebuild for v3.17.0" "TP: migrate triominos-server deploys to devbox3" \
+    "LO: release-playbook.md §3" "CRM: release v2.1.0" "Release 1.18.38"; do
+  g enforce issue create --title "$title"; rc_is 0 "not a release issue: $title"
+done
 
 # fail-open: a crashing gate still runs the raw command (stdin body kept)
 # python, not sed: BSD sed (macOS, gravity) has no \n in replacements

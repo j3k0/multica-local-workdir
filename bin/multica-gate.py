@@ -575,7 +575,7 @@ RELEASE_PRODUCTS = [
      re.compile(r"deploy triominos-server|release v?\d|\bv2\.\d+\.\d+", re.I),
      "7b9e8394-a576-46c9-bd1a-7b2a9a8421f7", "TRIDRelease"),
     ("triominos-client", re.compile(r"^\s*(TRI|TC):"),
-     re.compile(r"[Rr]elease (triominos-)?\d+\.\d+\.\d+"),
+     re.compile(r"[Rr]elease (triominos-)?\d+\.\d+(\.\d+)?\b"),  # trains: "TC: release 1.19"
      "7b9e8394-a576-46c9-bd1a-7b2a9a8421f7", "TRIDRelease"),
     ("leekha-android", re.compile(r"^\s*LO:"),
      re.compile(r"release android-|android-v", re.I),
@@ -598,7 +598,7 @@ def release_product(title):
 
 def standing_release(marker):
     """Identifiers of the open issues carrying release_product=<marker>;
-    [] when none or unreadable (the refusal then just names the RC)."""
+    [] when none, None when the lookup failed (the refusal then says so)."""
     try:
         p = subprocess.run([REAL, "issue", "list", "--metadata", f"release_product={marker}",
                             "--limit", "20", "--output", "json", "--fields", "identifier,status"],
@@ -607,7 +607,7 @@ def standing_release(marker):
         rows = d.get("issues", []) if isinstance(d, dict) else d
         return [r["identifier"] for r in rows if r.get("status") not in CLOSED and r.get("identifier")]
     except Exception:
-        return []
+        return None
 
 
 def release_problem(title):
@@ -619,6 +619,8 @@ def release_problem(title):
     where = standing_release(marker)
     if where:
         there = f"Comment on the standing release issue {' / '.join(where)}"
+    elif where is None:
+        there = f"Couldn't look up the standing release issue: ask {rc_name} where to comment"
     else:
         there = "No release issue is open: comment on your own issue"
     return (f"{marker} has a Release Captain ({rc_name}); only it opens release issues (FOV-2476). "

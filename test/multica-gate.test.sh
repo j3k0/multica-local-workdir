@@ -409,6 +409,16 @@ has "issue list --metadata release_product=triominos-client --limit 20 --output 
 g enforce issue create --title "LO: release android-v1.2.4"
 says "No release issue is open" "no standing issue: refusal says so"
 MULTICA_AGENT_ID="$LORC" g enforce issue create --title "TRI: Release 1.18.38"; rc_is 3 "another product's RC is refused"
+# Triominos client releases are trains (release 1.N, no patch number; SACompliance review of PR #8)
+for title in "TC: release 1.19" "TC: Release 1.19 train" "TC: release 1.19 — hotfix" "TRI: Release 1.19"; do
+  g enforce issue create --title "$title"; rc_is 3 "enforce: train title refused: $title"
+  MULTICA_AGENT_ID="$TRIRC" g enforce issue create --title "$title"; rc_is 0 "train title allowed for its RC: $title"
+done
+g enforce issue create --title "TC: release 1.19x notes"; rc_is 0 "train test needs a word boundary"
+# a failed standing-issue lookup is not "none open"
+STUB_FAIL="release_product" g enforce issue create --title "TRI: Release 1.18.38"
+rc_is 3 "failed lookup: still refused"; says "Couldn't look up the standing release issue: ask TRIDRelease" "failed lookup: says so"
+echo "$out" | grep -qF "No release issue is open" && fail "failed lookup must not claim none open" "$out" || ok "failed lookup: no 'none open' claim"
 # --flag=value form is normalised before the rule runs (reviewer finding, PR #8)
 g enforce issue create --title="TRI: Release 1.18.38"; rc_is 3 "enforce: --title=<value> form refused too"
 g enforce "issue" create "--title=LO: release android-v1.2.4"; rc_is 3 "enforce: --title=<value> (LO) refused"

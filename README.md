@@ -97,6 +97,8 @@ Policy on plain commands:
   `RELEASE_PRODUCTS`) — refused unless the caller is that product's RC. The
   message names the open standing issue (metadata `release_product=<product>`)
   and says to mention the RC there with the PR and rollout notes (FOV-2479).
+  Known limit: only `create` is checked; `issue update --title` can still
+  rename an existing issue into a release title.
 - Forbidden-to-dispatch agents (`Integrity`, `Librarian`, the three APMs;
   override with `LWD_GATE_FORBIDDEN`) can neither be `--next`-ed/mentioned as
   the next actor, nor dispatch agents themselves.

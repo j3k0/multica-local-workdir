@@ -409,6 +409,10 @@ has "issue list --metadata release_product=triominos-client --limit 20 --output 
 g enforce issue create --title "LO: release android-v1.2.4"
 says "No release issue is open" "no standing issue: refusal says so"
 MULTICA_AGENT_ID="$LORC" g enforce issue create --title "TRI: Release 1.18.38"; rc_is 3 "another product's RC is refused"
+# --flag=value form is normalised before the rule runs (reviewer finding, PR #8)
+g enforce issue create --title="TRI: Release 1.18.38"; rc_is 3 "enforce: --title=<value> form refused too"
+g enforce "issue" create "--title=LO: release android-v1.2.4"; rc_is 3 "enforce: --title=<value> (LO) refused"
+g enforce issue create --title="TC: Release workflow hardening"; rc_is 0 "--title=<value> negative passes"
 for title in "TC: 1.18.29 beta upload" "TC: Release workflow hardening" "TS: release boot smoke + supervisor test" \
     "TRI: Release Captain role and daily look" "IB: v3.17 security pass follow-ups" "IB: hotfix v3.14.8 — backport" \
     "IB: events-view rebuild for v3.17.0" "TP: migrate triominos-server deploys to devbox3" \

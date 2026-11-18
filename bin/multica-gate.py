@@ -63,6 +63,11 @@ FORBIDDEN = {n.strip().lower() for n in os.environ.get(
 # mode); every allowlisted close is logged.
 DONE_AGENTS = {n.strip().lower() for n in os.environ.get(
     "LWD_GATE_DONE_AGENTS", "secretary").split(",") if n.strip()}
+# `released` has its own list (JC, FOV-2098o): a product's Release Captain closes
+# its own releases; `done` stays human-only for them.
+RELEASE_AGENTS = {n.strip().lower() for n in os.environ.get(
+    "LWD_GATE_RELEASE_AGENTS",
+    "TRIDRelease,LODRelease,IAPDRelease,PACSA").split(",") if n.strip()}
 
 DONE_MSG = "closing is a human's call; use: multica issue comment add <id> --next-human <human-name>"
 
@@ -506,8 +511,9 @@ def status_problem(key, issue_id, has_waiting, has_duplicate=False):
     """Policy problems for a target status; None when allowed.
     JC, FOV-2098i: only a human closes or cancels; agents may cancel duplicates."""
     if key in ("done", "released"):
-        if SELF_NAME.lower() in DONE_AGENTS:
-            say(f"{key} allowed for {SELF_NAME} (LWD_GATE_DONE_AGENTS)")
+        allowed = DONE_AGENTS | (RELEASE_AGENTS if key == "released" else set())
+        if SELF_NAME.lower() in allowed:
+            say(f"{key} allowed for {SELF_NAME} (LWD_GATE_DONE_AGENTS / LWD_GATE_RELEASE_AGENTS)")
             log("done-allowlisted", ["issue", "status", issue_id, key, f"by={SELF_NAME}"])
             return None
         return DONE_MSG.replace("<id>", issue_id)

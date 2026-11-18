@@ -141,10 +141,24 @@ if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${#_tokens[@]}" -gt 0 ]; then
       fi
       _gate_mode="${LWD_GATE_MODE:-warn}"
       _enforce_agents="${LWD_GATE_ENFORCE_AGENTS:-}"
-      if [ -z "$_enforce_agents" ] && [ -f "$REPO_DIR/.env" ]; then
+      _enforce_except="${LWD_GATE_ENFORCE_EXCEPT:-}"
+      if [ -z "$_enforce_agents" ] && [ -z "$_enforce_except" ] && [ -f "$REPO_DIR/.env" ]; then
         _enforce_agents="$(. "$REPO_DIR/.env" >/dev/null 2>&1; printf '%s' "${LWD_GATE_ENFORCE_AGENTS:-}")"
+        _enforce_except="$(. "$REPO_DIR/.env" >/dev/null 2>&1; printf '%s' "${LWD_GATE_ENFORCE_EXCEPT:-}")"
       fi
-      if [ -n "$_enforce_agents" ]; then
+      if [ -n "$_enforce_except" ]; then
+        # FOV-2098o: refuse for everyone except the listed agents (rollout state).
+        # Ambient > .env; this knob wins over LWD_GATE_ENFORCE_AGENTS when set.
+        _gate_mode=enforce
+        IFS=, read -r -a _lst <<< "$_enforce_except"
+        for _n in "${_lst[@]}"; do
+          _n="${_n#"${_n%%[![:space:]]*}"}"; _n="${_n%"${_n##*[![:space:]]}"}"
+          if [ "$(printf '%s' "$_n" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${MULTICA_AGENT_NAME:-}" | tr '[:upper:]' '[:lower:]')" ]; then
+            _gate_mode=warn
+            break
+          fi
+        done
+      elif [ -n "$_enforce_agents" ]; then
         IFS=, read -r -a _lst <<< "$_enforce_agents"
         for _n in "${_lst[@]}"; do
           _n="${_n#"${_n%%[![:space:]]*}"}"; _n="${_n%"${_n##*[![:space:]]}"}"
@@ -154,7 +168,7 @@ if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${#_tokens[@]}" -gt 0 ]; then
           fi
         done
       fi
-      unset _gate_agents _enforce_agents _n _in_list _lst
+      unset _gate_agents _enforce_agents _enforce_except _n _in_list _lst
       MULTICA_REAL_BIN="$real_bin" \
       LWD_GATE_LOG="$LOG_FILE" \
       LWD_GATE_MODE="$_gate_mode" \

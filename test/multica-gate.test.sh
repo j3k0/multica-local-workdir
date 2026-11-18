@@ -298,6 +298,17 @@ rc_is 0 "agent list failure: --next-human proceeds (fail-open check)"
 mkissue in_progress m-1 member
 LWD_GATE_DONE_AGENTS=Secretary MULTICA_AGENT_NAME=Secretary g enforce issue status I done
 rc_is 0 "LWD_GATE_DONE_AGENTS: Secretary may close"; grep -q 'done-allowlisted' "$LOG" && ok "allowlisted close logged" || fail "allowlist log" "$(cat "$LOG")"
+# FOV-2098o: Release Captains mark released; done stays human-only for them
+MULTICA_AGENT_NAME=TRIDRelease g enforce issue status I released
+rc_is 0 "release captain may set released by default"; grep -q 'done-allowlisted.*released.*by=TRIDRelease' "$LOG" && ok "released allowlist logged with agent" || fail "released log" "$(tail -2 "$LOG")"
+MULTICA_AGENT_NAME=TRIDRelease g enforce issue status I done
+rc_is 3 "release captain may not set done"
+MULTICA_AGENT_NAME=Secretary g enforce issue status I released
+rc_is 0 "secretary may also release"
+LWD_GATE_RELEASE_AGENTS=NobodyElse MULTICA_AGENT_NAME=TRIDRelease g enforce issue status I released
+rc_is 3 "LWD_GATE_RELEASE_AGENTS overrides the default"
+MULTICA_AGENT_NAME=RunnerAgent g enforce issue status I released
+rc_is 3 "other agents may not release"
 LWD_GATE_DONE_AGENTS=Secretary g enforce issue status I done; rc_is 3 "allowlist is per agent (RunnerAgent still refused)"
 # nits
 g enforce issue assign I --to OtherAgent --no-start; rc_is 0 "assign --no-start passes (starts no run)"
@@ -337,6 +348,14 @@ LWD_GATE_AGENTS=runneragent g warn issue status I done
 rc_is 0 "canary list is case-insensitive"
 echo "$out" | grep -q "closing is a human" && ok "canary ci: gate advice present" || fail "canary ci" "$out"
 LWD_GATE_ENFORCE_AGENTS=RunnerAgent g warn issue status I done; rc_is 3 "LWD_GATE_ENFORCE_AGENTS: member runs in enforce"
+# FOV-2098o: refuse for everyone except the listed agents
+LWD_GATE_ENFORCE_EXCEPT=Secretary g warn issue status I done; rc_is 3 "LWD_GATE_ENFORCE_EXCEPT: everyone else refuses"
+LWD_GATE_ENFORCE_EXCEPT=secretary MULTICA_AGENT_NAME=Secretary g warn issue status I done
+rc_is 0 "LWD_GATE_ENFORCE_EXCEPT: listed agent stays in warn (case-insensitive)"
+LWD_GATE_ENFORCE_EXCEPT="Other Agent, RunnerAgent" g warn issue status I in_progress
+rc_is 0 "LWD_GATE_ENFORCE_EXCEPT: an allowed command passes"
+LWD_GATE_ENFORCE_EXCEPT=OtherAgent LWD_GATE_AGENTS="FakeAgent,OtherAgent" g warn issue status I done
+rc_is 0 "LWD_GATE_AGENTS (shim off) beats LWD_GATE_ENFORCE_EXCEPT"
 LWD_GATE_ENFORCE_AGENTS=RunnerAgent g warn issue status I in_progress
 rc_is 0 "LWD_GATE_ENFORCE_AGENTS: allowed command unaffected"
 LWD_GATE_ENFORCE_AGENTS=OtherAgent g warn issue status I done

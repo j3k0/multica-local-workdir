@@ -4,6 +4,12 @@
 # must get the shim there; other runs keep the daemon's CLI untouched.
 # Run: bash test/cli-path.test.sh
 exec </dev/null
+# Same hygiene as the other suites (FOV-2098 review #3): a gated agent run
+# carries the .env gate knobs, and LWD_GATE_ENFORCE_EXCEPT would turn the
+# launches under test into enforce mode.
+unset LWD_GATE_AGENTS LWD_GATE_ENFORCE_AGENTS LWD_GATE_ENFORCE_EXCEPT LWD_GATE_MODE \
+  LWD_GATE_DONE_AGENTS LWD_GATE_RELEASE_AGENTS LWD_GATE_FORBIDDEN
+unset MULTICA_BIN MULTICA_CLI_PATH
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT

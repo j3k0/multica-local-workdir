@@ -9,7 +9,8 @@
 # `cat` would block forever — FOV-2098 watchdog kills) and no ambient gate
 # knobs (the wrappers export .env's LWD_GATE_* into agent runs).
 exec </dev/null
-unset LWD_GATE_AGENTS LWD_GATE_ENFORCE_AGENTS LWD_GATE_MODE LWD_GATE_DONE_AGENTS LWD_GATE_FORBIDDEN
+unset LWD_GATE_AGENTS LWD_GATE_ENFORCE_AGENTS LWD_GATE_ENFORCE_EXCEPT LWD_GATE_MODE \
+  LWD_GATE_DONE_AGENTS LWD_GATE_RELEASE_AGENTS LWD_GATE_FORBIDDEN
 # canary wrappers export these too (FOV-2098 review #2)
 unset MULTICA_BIN MULTICA_CLI_PATH
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

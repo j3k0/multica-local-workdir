@@ -78,6 +78,38 @@ for _arg in "$@"; do
     *) _tokens+=("$_arg") ;;
   esac
 done
+# ------------------------------------------------------- report-only (FOV-2848) ---
+# LWD_REPORT_ONLY=1 is set by the sandbox launcher (sbx-launch) for the agents that read user
+# data (Ema, Freshdesk, the Graylog readers). They report what their data says; they never start
+# work. This is the friendly layer: it refuses early with a message the agent can act on. The
+# boundary is multica-report-gate (the agent's uid can reach nothing else), so a bypass here
+# gains nothing. Allowed commands go straight to the real CLI (no handoff flags, no gate).
+if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${LWD_REPORT_ONLY:-}" = "1" ]; then
+  _ro_ok=false
+  _ro_why="report-only agent: you may read your issue, comment on it, and set it to in_progress, in_review or blocked. You never create, assign or hand off work. Report what the data says (\"X said: …\") in a comment; the requester decides what happens next."
+  case "${_tokens[0]:-} ${_tokens[1]:-} ${_tokens[2]:-}" in
+    "issue get "*|"issue comment list"|"chat history "*|"chat thread "*|"version  "|"  ") _ro_ok=true ;;
+    "issue comment add") _ro_ok=true ;;
+    "issue status "*)
+      case "${_tokens[3]:-}" in in_progress|in_review|blocked) _ro_ok=true ;; esac ;;
+  esac
+  for _arg in "$@"; do
+    case "$_arg" in
+      --help|-h) _ro_ok=true ;;
+      --next|--next=*|--next-human|--next-human=*|--waiting-on|--waiting-on=*|--no-next-actor|--progress|--attachment|--attachment=*)
+        _ro_ok=false
+        _ro_why="report-only agent: '$_arg' is not available. Post a plain comment in the thread that asked you (you may mention the agent that asked; no other agent). No handoff flags, no attachments."
+        break ;;
+    esac
+  done
+  if [ "$_ro_ok" != "true" ]; then
+    { printf '%s|report-only|refuse|@%s|' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${MULTICA_AGENT_NAME:--}"; printf '%q ' "$@" | cut -c 1-300; printf '\n'; } >> "$LOG_FILE" 2>/dev/null || true
+    echo "bin/multica: $_ro_why" >&2
+    exit 3
+  fi
+  exec "$real_bin" "$@"
+fi
+
 if [ "${LWD_AGENT_RUN:-}" = "1" ] && [ "${#_tokens[@]}" -gt 0 ]; then
   cmd="${_tokens[0]}"
   sub="${_tokens[1]:-}"

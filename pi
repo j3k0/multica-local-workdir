@@ -79,12 +79,38 @@ _lwd_hindsight_retain_override="$LWD_HINDSIGHT_RETAIN_EVERY_N_TURNS"
 # re-applied after, so ambient (per-agent) wins and .env stays the fallback.
 _litellm_pi_key_override="${LITELLM_PI_KEY:-}"
 
+# FOV-2848 inner run: the launcher's values beat the sandbox .env (which describes the daemon).
+_sbx_pi_bin="${PI_BIN:-}"; _sbx_log_dir="${LOG_DIR:-}"; _sbx_server_url="${MULTICA_SERVER_URL:-}"
+
 # Source optional .env file (e.g. OMP_BIN / PI_BIN / LWD_PI_VARIANT)
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -a
   . "$SCRIPT_DIR/.env"
   set +a
 fi
+
+# --- FOV-2848: per-agent sandbox users -----------------------------------------------------
+# Outer (the sandbox daemon's uid): when the .env sets LWD_SBX_SOCKET_DIR (sandbox clone only),
+# an agent run does not start here. sbx-run hands it to the root launcher of THIS agent
+# (<dir>/<agent id>.sock), which runs this same wrapper as the agent's own Unix user with
+# LWD_SBX_INNER=1. No socket for the agent = the run fails (closed), it never runs as the daemon.
+# Runs without an agent id (the daemon's `pi --version` probes) stay local.
+# Inner (LWD_SBX_INNER=1, set only by sbx-launch): never delegate again; restore the launcher's
+# PI_BIN / LOG_DIR / MULTICA_SERVER_URL over the .env's daemon values.
+if [ "${LWD_SBX_INNER:-}" = "1" ]; then
+  [ -n "$_sbx_pi_bin" ] && PI_BIN="$_sbx_pi_bin"
+  [ -n "$_sbx_log_dir" ] && LOG_DIR="$_sbx_log_dir" && _log_dir="$_sbx_log_dir"
+  if [ -n "$_sbx_server_url" ]; then MULTICA_SERVER_URL="$_sbx_server_url"; else unset MULTICA_SERVER_URL; fi
+  unset LWD_SBX_SOCKET_DIR
+elif [ -n "${LWD_SBX_SOCKET_DIR:-}" ] && [ -n "${MULTICA_AGENT_ID:-}" ]; then
+  case "$MULTICA_AGENT_ID" in
+    *[!0-9a-f-]*) echo "pi: refusing to launch: malformed MULTICA_AGENT_ID" >&2; exit 126 ;;
+  esac
+  _pi_log_early() { printf '%s sbx: run of agent %s handed to %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$MULTICA_AGENT_ID" "$LWD_SBX_SOCKET_DIR" >> "$_log_dir/pi.log" 2>/dev/null || true; }
+  _pi_log_early
+  exec "${SBX_RUN_BIN:-/usr/local/bin/sbx-run}" "$LWD_SBX_SOCKET_DIR/$MULTICA_AGENT_ID.sock" -- "$@"
+fi
+unset _sbx_pi_bin _sbx_log_dir _sbx_server_url
 
 # Re-apply the ambient overrides (per-agent) over the .env defaults.
 [ -n "$_lwd_pi_variant_override" ] && LWD_PI_VARIANT="$_lwd_pi_variant_override"

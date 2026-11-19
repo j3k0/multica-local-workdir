@@ -16,8 +16,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 # LWD_SHIM_LOG: the sandbox launcher points it at the agent's own log dir (FOV-2848: the agent uid
-# cannot write the clone's logs/). Unset everywhere else.
-LOG_FILE="${LWD_SHIM_LOG:-$REPO_DIR/logs/multica-shim.log}"
+# cannot write the clone's logs/). Honoured only for report-only agents, so a main-runtime agent
+# can't redirect this audit log by setting an env var.
+LOG_FILE="$REPO_DIR/logs/multica-shim.log"
+if [ "${LWD_REPORT_ONLY:-}" = "1" ] && [ -n "${LWD_SHIM_LOG:-}" ]; then
+  LOG_FILE="$LWD_SHIM_LOG"
+fi
 
 # ---------------------------------------------------------------- resolve ---
 # Real binary: ambient MULTICA_BIN, then MULTICA_BIN from .env (read in a

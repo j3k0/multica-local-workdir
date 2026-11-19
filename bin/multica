@@ -15,7 +15,9 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
-LOG_FILE="$REPO_DIR/logs/multica-shim.log"
+# LWD_SHIM_LOG: the sandbox launcher points it at the agent's own log dir (FOV-2848: the agent uid
+# cannot write the clone's logs/). Unset everywhere else.
+LOG_FILE="${LWD_SHIM_LOG:-$REPO_DIR/logs/multica-shim.log}"
 
 # ---------------------------------------------------------------- resolve ---
 # Real binary: ambient MULTICA_BIN, then MULTICA_BIN from .env (read in a

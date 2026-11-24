@@ -157,3 +157,37 @@ To restore per-consolidation refresh: first delete the `ExecStartPre` line from
 `systemd/hindsight-refresh.service` and `systemctl --user daemon-reload` (otherwise the next
 hourly run switches it back off), then `hindsight/refresh-off.sh --apply true`.
 Tests: `hindsight/tests/fake-binaries.sh` (no live writes).
+
+## Per-bank LLM routing (FOV-2945)
+
+Hindsight 1.1 can't pick the LLM per bank through the bank config API: model and provider
+are server-wide. `ext/bank_llm_routes.py` is an LLM request extension. Hindsight asks it
+once per LLM call (retain, consolidation, reflect, mental-model refresh), with the bank id.
+Listed banks go to another alias on the same LiteLLM gateway, with Hindsight's own key.
+Every other bank keeps `memory`.
+
+Live since 2026-11-24 on devbox3: `agent-ema` → `qwen3.8-flash-next` (tripster pool only,
+no hosted fallback), so her memory stays in house (register row K2, FOV-2938). The bank
+also has `enable_reranking=false` (no OpenRouter rerank) and `consolidation_llm_parallelism=1`.
+
+- Deployed copy: `/opt/projects/tools/hindsight/ext/`, mounted read-only at `/opt/fovea-ext`.
+  Env in the compose file: `PYTHONPATH`, `HINDSIGHT_API_LLM_REQUEST_EXTENSION`,
+  `HINDSIGHT_API_LLM_REQUEST_BANK_MODELS`, `HINDSIGHT_API_LLM_REQUEST_TIMEOUT`.
+- Check: `docker logs hindsight | grep 'bank_llm_routes: bank='` (one line per routed call).
+- Tests: `hindsight/tests/test_bank_llm_routes.py` (unit) and `test_no_fallback.py`: when the
+  routed LLM fails, Hindsight retries on it and then fails the call. It never falls back to the
+  server's `memory` model. That holds while no `HINDSIGHT_API_LLM_<n>_*` chain members are set.
+  A failed retain is retried later by the worker, still routed. Commands in the docstrings.
+- Watch: `ema-route-check.sh` (timer `ema-route-check.timer`, every 15 min) opens one urgent issue
+  for DSA if any of these happens: Ema's bank (key `agent/ema`, metadata `hindsight_bank`) is
+  missing from the route map, the extension logged no route at startup, reranking is back on,
+  or the bank was active with no routed call. Spend logs can't do this: Hindsight's rows carry
+  no bank id. `--dry-run` prints the verdict.
+- Queue: `curl -s '127.0.0.1:18888/v1/default/banks/agent-ema/operations?status=pending' | jq .total`.
+  Ema saves at most ~11 times a day (gate log, 14 days), so about 3.3 h/day of pool time, no backlog.
+- Known limits: the tripster pool takes ~6 min per retain call (async, fine) and ~12 min
+  per consolidation call. Reflect has a server-wide 300 s wall clock, so a reflect on
+  `agent-ema` times out. Ema hasn't called reflect in 14 days and has no mental models.
+  Calls that Hindsight doesn't tie to a bank keep the server LLM; none were seen.
+- Undo: remove those 4 env lines and the `./ext` mount, then `docker compose up -d`; disable
+  `ema-route-check.timer` too, or it alerts.

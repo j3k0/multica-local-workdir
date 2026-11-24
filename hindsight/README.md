@@ -178,6 +178,8 @@ also has `enable_reranking=false` (no OpenRouter rerank) and `consolidation_llm_
   routed LLM fails, Hindsight retries on it and then fails the call. It never falls back to the
   server's `memory` model. That holds while no `HINDSIGHT_API_LLM_<n>_*` chain members are set.
   A failed retain is retried later by the worker, still routed. Commands in the docstrings.
+  `test_no_fallback.py` uses Hindsight internals (`memory_engine._current_bank_id`), pinned to
+  1.1.0-slim. Re-run both tests on every Hindsight upgrade: a break means re-check the routing.
 - Watch: `ema-route-check.sh` (timer `ema-route-check.timer`, every 15 min) opens one urgent issue
   for DSA if any of these happens: Ema's bank (key `agent/ema`, metadata `hindsight_bank`) is
   missing from the route map, the extension logged no route at startup, reranking is back on,

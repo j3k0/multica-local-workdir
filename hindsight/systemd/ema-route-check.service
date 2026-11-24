@@ -1,0 +1,10 @@
+[Unit]
+Description=Alert when Ema's Hindsight memory stops being routed in house (FOV-2945)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=%h
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin:%h/bin
+TimeoutStartSec=180
+ExecStart=/opt/projects/tools/multica-local-workdir/hindsight/ema-route-check.sh

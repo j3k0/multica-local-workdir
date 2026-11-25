@@ -150,10 +150,10 @@ H=/opt/projects/tools/multica-local-workdir/hindsight
 install -m 600 /dev/null ~/.config/openrouter-alert.env   # optional OPENROUTER_MGMT_KEY / OPENROUTER_MIN_USD
 ln -s $H/systemd/*.service $H/systemd/*.timer ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now hindsight-refresh.timer openrouter-alert.timer \
-  ema-route-check.timer intern-route-check.timer
+  ema-route-check.timer intern-route-check.timer fostersa-route-check.timer iapgsup-route-check.timer
 ```
 
-Rollback: `systemctl --user disable --now hindsight-refresh.timer openrouter-alert.timer ema-route-check.timer intern-route-check.timer`, then remove the links.
+Rollback: `systemctl --user disable --now hindsight-refresh.timer openrouter-alert.timer ema-route-check.timer intern-route-check.timer fostersa-route-check.timer iapgsup-route-check.timer`, then remove the links.
 To restore per-consolidation refresh: first delete the `ExecStartPre` line from
 `systemd/hindsight-refresh.service` and `systemctl --user daemon-reload` (otherwise the next
 hourly run switches it back off), then `hindsight/refresh-off.sh --apply true`.
@@ -180,6 +180,9 @@ reflect, which still times out at 300 s on the tripster pool.
 (`agent-intern=qwen3.8-flash-next`): Intern loads no memory plugin, but the Hindsight API and
 `/mcp/` take no auth on the tailnet, so anyone could reflect on his bank.
 
+`agent-fostersa` and `agent-iapgsup` (FOV-2971, register row K1: they read iaptic production
+data) have the same four settings and the same route since 2026-11-25 17:45 UTC.
+
 - Deployed copy: `/opt/projects/tools/hindsight/ext/`, mounted read-only at `/opt/fovea-ext`.
   Env in the compose file: `PYTHONPATH`, `HINDSIGHT_API_LLM_REQUEST_EXTENSION`,
   `HINDSIGHT_API_LLM_REQUEST_BANK_MODELS`, `HINDSIGHT_API_LLM_REQUEST_TIMEOUT`.
@@ -198,7 +201,8 @@ reflect, which still times out at 300 s on the tripster pool.
   call for the bank on any model other than its route (hosted LLM or OpenRouter rerank).
   Spend logs can't do the last one: their rows carry no bank id. `--dry-run` prints the verdict.
   `intern-route-check.timer` runs the same script with `ROUTE_BANK=agent-intern`
-  (`alert_key=intern-hindsight-route`).
+  (`alert_key=intern-hindsight-route`); `fostersa-route-check.timer` and `iapgsup-route-check.timer`
+  likewise (`alert_key=<name>-hindsight-route`).
 - Alert "no-model settings undone": someone changed the bank config. Re-apply with
   `curl -X PATCH 127.0.0.1:18888/v1/default/banks/<bank>/config -H 'content-type: application/json'
   -d '{"updates":{"retain_extraction_mode":"chunks","enable_observations":false,"enable_auto_consolidation":false,"enable_reranking":false}}'`,
@@ -214,4 +218,4 @@ reflect, which still times out at 300 s on the tripster pool.
   `agent-ema` times out; the tripster call behind it keeps running (one ran 588 s). Ema hasn't called reflect in 14 days and has no mental models.
   Calls that Hindsight doesn't tie to a bank keep the server LLM; none were seen.
 - Undo: remove those 4 env lines and the `./ext` mount, then `docker compose up -d`; disable
-  `ema-route-check.timer` and `intern-route-check.timer` too, or they alert.
+  all four `*-route-check.timer` units too, or they alert.

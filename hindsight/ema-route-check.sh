@@ -105,9 +105,9 @@ open=$(jq -r '(if type=="object" then .issues else . end)[] | select(.status|IN(
 [[ -n "$open" ]] && { echo "already open: $open"; exit 0; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT; cd "$tmp"
 printf '%s\n\n%s\n\n%s\n' \
-  "TL;DR: Hindsight bank $bank may be using hosted models again (Ema: register row K2, FOV-2938; Intern: FOV-2962). Fix the routing (runbook: multica-local-workdir hindsight/README.md, \"Per-bank LLM routing\")." \
+  "TL;DR: Hindsight bank $bank may be using hosted models again (Ema: register row K2, FOV-2938; Intern: FOV-2962; FosterSA, IAPGSUP: register row K1, FOV-2971). Fix the routing (runbook: multica-local-workdir hindsight/README.md, \"Per-bank LLM routing\")." \
   "$problem" \
-  "Raised by \`hindsight/ema-route-check.sh\` on devbox3 (timer \`ema-route-check.timer\` or \`intern-route-check.timer\`, FOV-2945). It stays quiet while this issue is open." > description.md
+  "Raised by \`hindsight/ema-route-check.sh\` on devbox3 (timer \`<name>-route-check.timer\`, FOV-2945). It stays quiet while this issue is open." > description.md
 out=$(multica issue create --title "OPS: Hindsight bank $bank may be leaving the house" --description-file description.md \
   --assignee-id "$DSA_ID" --priority urgent --output json) || { echo "FAILED to create alert issue" >&2; exit 1; }
 new=$(jq -er .id <<<"$out") || { echo "created an issue but cannot parse its id" >&2; exit 1; }

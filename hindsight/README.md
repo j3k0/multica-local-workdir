@@ -149,10 +149,11 @@ Install (keep `/opt/projects/tools/multica-local-workdir` on `main`: the units r
 H=/opt/projects/tools/multica-local-workdir/hindsight
 install -m 600 /dev/null ~/.config/openrouter-alert.env   # optional OPENROUTER_MGMT_KEY / OPENROUTER_MIN_USD
 ln -s $H/systemd/*.service $H/systemd/*.timer ~/.config/systemd/user/
-systemctl --user daemon-reload && systemctl --user enable --now hindsight-refresh.timer openrouter-alert.timer
+systemctl --user daemon-reload && systemctl --user enable --now hindsight-refresh.timer openrouter-alert.timer \
+  ema-route-check.timer intern-route-check.timer
 ```
 
-Rollback: `systemctl --user disable --now hindsight-refresh.timer openrouter-alert.timer`, then remove the links.
+Rollback: `systemctl --user disable --now hindsight-refresh.timer openrouter-alert.timer ema-route-check.timer intern-route-check.timer`, then remove the links.
 To restore per-consolidation refresh: first delete the `ExecStartPre` line from
 `systemd/hindsight-refresh.service` and `systemctl --user daemon-reload` (otherwise the next
 hourly run switches it back off), then `hindsight/refresh-off.sh --apply true`.

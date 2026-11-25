@@ -75,12 +75,15 @@ if [[ -n "$bank" ]]; then
   db=$(docker exec hindsight sh -c 'PGPASSWORD=$(python3 -c "import json;print(json.load(open(\"/home/hindsight/.pg0/instances/hindsight/instance.json\"))[\"password\"])") \
     /home/hindsight/.pg0/installation/*/bin/psql -h 127.0.0.1 -U hindsight -d hindsight -AtF" " -c "
     select count(*) filter (where operation='"'"'reflect'"'"' and started_at > now()-interval '"'"'20 minutes'"'"'),
-           count(*) filter (where provider<>'"'"'tei'"'"' and model is distinct from '"'"'$1'"'"')
+           count(*) filter (where provider is distinct from '"'"'tei'"'"' and model is distinct from '"'"'$1'"'"'),
+           (select count(*) from llm_requests where started_at > now()-interval '"'"'60 minutes'"'"')
     from llm_requests where bank_id='"'"'$0'"'"' and started_at > now()-interval '"'"'60 minutes'"'"'"' "$bank" "$alias" 2>&1)
-  if [[ ! "$db" =~ ^[0-9]+\ [0-9]+$ ]]; then
+  if [[ ! "$db" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ ]]; then
     problems+=("cannot read Hindsight llm_requests for $bank (got: ${db:0:150})")
   else
-    read -r reflects hosted <<<"$db"
+    read -r reflects hosted total <<<"$db"
+    # Canary: check 5 is blind if Hindsight stops writing llm_requests (trace off, schema change).
+    (( total == 0 )) && problems+=("Hindsight wrote 0 llm_requests rows server-wide in 60 min: LLM tracing may be off, so the hosted-call check is blind")
     active=$((active + reflects))
     (( hosted > 0 )) && problems+=("$bank made $hosted LLM/rerank call(s) in 60 min on a model other than ${alias:-its route}: hosted model or OpenRouter rerank")
   fi

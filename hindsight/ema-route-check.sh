@@ -7,29 +7,34 @@
 #  3. Reranking is back on for the bank (that path goes to OpenRouter), or one of the no-model
 #     settings (FOV-2962) is undone: retain_extraction_mode=chunks, enable_observations=false,
 #     enable_auto_consolidation=false.
-#  4. Only if the bank is not in chunks mode: retain/consolidation activity in the last 20 min
-#     but no routed call in 60 min. In chunks mode retain makes no LLM call at all.
-# LiteLLM_SpendLogs can't help here: Hindsight's rows carry no bank id, and other banks use the
-# hosted `memory` alias with the same key all the time.
-# Alert = one open urgent Multica issue (metadata alert_key=ema-hindsight-route), assigned to DSA.
+#  4. Activity that means a model call (consolidation LLM batch, reflect, and retain outside
+#     chunks mode) in the last 20 min but no routed call in 60 min.
+#  5. Hindsight's own llm_requests log shows a call for the bank in the last 60 min on any model
+#     other than its routed alias (hosted LLM or OpenRouter rerank). Rows carry the bank id;
+#     LiteLLM_SpendLogs don't, so they can't be used for this.
+# Alert = one open urgent Multica issue (metadata alert_key=$ALERT_KEY), assigned to DSA.
+# Other banks: ROUTE_BANK=<bank> ALERT_KEY=<key> (no LiteLLM key lookup), e.g. agent-intern.
 # Usage: ema-route-check.sh [--dry-run]
 set -uo pipefail
 DRY=0; [[ "${1:-}" == "--dry-run" ]] && DRY=1
 KEY_ALIAS="${EMA_KEY_ALIAS:-agent/ema}"
 HS=http://127.0.0.1:18888/v1/default
 DSA_ID=4c8d7afb-acdc-4f89-a96a-3ff709b2959c
+ALERT_KEY="${ALERT_KEY:-ema-hindsight-route}"
 export MULTICA_WORKSPACE_ID="${MULTICA_WORKSPACE_ID:-7253250f-2139-4450-811b-2f08dd69a242}"
 problems=()
 
-# EMA_BANK overrides the lookup (tests only).
-bank=${EMA_BANK:-$(docker exec litellm-postgres psql -U litellm -d litellm -Atc \
-  "select metadata->>'hindsight_bank' from \"LiteLLM_VerificationToken\" where key_alias='$KEY_ALIAS'" 2>&1)}
+# ROUTE_BANK (or EMA_BANK, tests) skips the LiteLLM key lookup.
+bank=${ROUTE_BANK:-${EMA_BANK:-}}
+[[ -n "$bank" ]] || bank=$(docker exec litellm-postgres psql -U litellm -d litellm -Atc \
+  "select metadata->>'hindsight_bank' from \"LiteLLM_VerificationToken\" where key_alias='$KEY_ALIAS'" 2>&1)
 if [[ ! "$bank" =~ ^[a-z0-9-]+$ ]]; then
   problems+=("cannot read the bank of key $KEY_ALIAS from LiteLLM (got: ${bank:0:100})"); bank=""
 fi
 routes=$(docker inspect hindsight --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
   | sed -n 's/^HINDSIGHT_API_LLM_REQUEST_BANK_MODELS=//p')
-if [[ -n "$bank" ]] && ! tr ',' '\n' <<<"$routes" | grep -qx "$bank=[^=]*"; then
+alias=$(tr ',' '\n' <<<"$routes" | sed -n "s/^$bank=\([^=]*\)$/\1/p" | head -1)
+if [[ -n "$bank" && -z "$alias" ]]; then
   problems+=("bank $bank is not in HINDSIGHT_API_LLM_REQUEST_BANK_MODELS (\"$routes\"): its LLM calls use the hosted server model")
 fi
 
@@ -48,7 +53,9 @@ fi
 if [[ -n "$bank" ]]; then
   cfg=$(curl -s -m 20 -w '\n%{http_code}' "$HS/banks/$bank/config")
   code=${cfg##*$'\n'}
-  if [[ "$code" != 200 ]]; then problems+=("reading $bank config: HTTP $code ${cfg:0:200}")
+  if [[ "$code" == 401 ]]; then problems+=("reading $bank config: authentication failed (HTTP 401)")
+  elif [[ "$code" == 403 ]]; then problems+=("reading $bank config: permission denied (HTTP 403)")
+  elif [[ "$code" != 200 ]]; then problems+=("reading $bank config: HTTP $code ${cfg:0:200}")
   elif [[ $(jq -r '.config.enable_reranking' <<<"${cfg%$'\n'*}") != false ]]; then
     problems+=("enable_reranking is not false on $bank: its recalls are reranked on OpenRouter")
   fi
@@ -57,10 +64,28 @@ if [[ -n "$bank" ]]; then
   if [[ "$code" == 200 && "$nomodel" != "chunks false false" ]]; then
     problems+=("$bank no-model settings undone (mode/observations/auto-consolidation = $nomodel, want chunks false false; FOV-2962)")
   fi
-  active=$(docker logs --since 20m hindsight 2>&1 | grep -cE "RETAIN_BATCH START: $bank\$|\[CONSOLIDATION\] bank=$bank llm_batch")
-  routed=$(docker logs --since 60m hindsight 2>&1 | grep -c "bank_llm_routes: bank=$bank ")
-  if [[ "$mode" != chunks ]] && (( active > 0 && routed == 0 )); then
-    problems+=("$bank had $active retain/consolidation batch(es) in 20 min but no routed LLM call in 60 min")
+  # Lines that mean a model call. Retain counts only outside chunks mode (chunks = no LLM).
+  # Reflect's log id holds only 8 chars of the bank id, so reflect comes from llm_requests.
+  pat="\[CONSOLIDATION\] bank=$bank llm_batch"
+  [[ "$mode" != chunks ]] && pat+="|RETAIN_BATCH START: $bank\$"
+  logs=$(docker logs --since 60m hindsight 2>&1)
+  active=$(docker logs --since 20m hindsight 2>&1 | grep -cE "$pat")
+  routed=$(grep -c "bank_llm_routes: bank=$bank " <<<"$logs")
+  # Password stays inside the container.
+  db=$(docker exec hindsight sh -c 'PGPASSWORD=$(python3 -c "import json;print(json.load(open(\"/home/hindsight/.pg0/instances/hindsight/instance.json\"))[\"password\"])") \
+    /home/hindsight/.pg0/installation/*/bin/psql -h 127.0.0.1 -U hindsight -d hindsight -AtF" " -c "
+    select count(*) filter (where operation='"'"'reflect'"'"' and started_at > now()-interval '"'"'20 minutes'"'"'),
+           count(*) filter (where provider<>'"'"'tei'"'"' and model is distinct from '"'"'$1'"'"')
+    from llm_requests where bank_id='"'"'$0'"'"' and started_at > now()-interval '"'"'60 minutes'"'"'"' "$bank" "$alias" 2>&1)
+  if [[ ! "$db" =~ ^[0-9]+\ [0-9]+$ ]]; then
+    problems+=("cannot read Hindsight llm_requests for $bank (got: ${db:0:150})")
+  else
+    read -r reflects hosted <<<"$db"
+    active=$((active + reflects))
+    (( hosted > 0 )) && problems+=("$bank made $hosted LLM/rerank call(s) in 60 min on a model other than ${alias:-its route}: hosted model or OpenRouter rerank")
+  fi
+  if (( active > 0 && routed == 0 )); then
+    problems+=("$bank had $active model-call event(s) (consolidation/reflect/retain) in 20 min but no routed LLM call in 60 min")
   fi
 fi
 
@@ -69,7 +94,7 @@ problem=$(printf -- '- %s\n' "${problems[@]}")
 echo "ALERT:"; echo "$problem"
 (( DRY )) && exit 0
 
-if ! list=$(multica issue list --metadata "alert_key=ema-hindsight-route" --limit 50 --output json --fields id,status); then
+if ! list=$(multica issue list --metadata "alert_key=$ALERT_KEY" --limit 50 --output json --fields id,status); then
   echo "multica issue list failed; not creating an issue (would risk duplicates)" >&2; exit 1
 fi
 open=$(jq -r '(if type=="object" then .issues else . end)[] | select(.status|IN("cancelled","done","released")|not) | .id' <<<"$list" | head -1) \
@@ -77,12 +102,12 @@ open=$(jq -r '(if type=="object" then .issues else . end)[] | select(.status|IN(
 [[ -n "$open" ]] && { echo "already open: $open"; exit 0; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT; cd "$tmp"
 printf '%s\n\n%s\n\n%s\n' \
-  "TL;DR: Ema's Hindsight memory may be using hosted models again, which reopens register row K2 (FOV-2938). Fix the routing (runbook: multica-local-workdir hindsight/README.md, \"Per-bank LLM routing\")." \
+  "TL;DR: Hindsight bank $bank may be using hosted models again (Ema: register row K2, FOV-2938; Intern: FOV-2962). Fix the routing (runbook: multica-local-workdir hindsight/README.md, \"Per-bank LLM routing\")." \
   "$problem" \
-  "Raised by \`hindsight/ema-route-check.sh\` on devbox3 (timer \`ema-route-check.timer\`, FOV-2945). It stays quiet while this issue is open." > description.md
-out=$(multica issue create --title "OPS: Ema's Hindsight memory may be leaving the house" --description-file description.md \
+  "Raised by \`hindsight/ema-route-check.sh\` on devbox3 (timer \`ema-route-check.timer\` or \`intern-route-check.timer\`, FOV-2945). It stays quiet while this issue is open." > description.md
+out=$(multica issue create --title "OPS: Hindsight bank $bank may be leaving the house" --description-file description.md \
   --assignee-id "$DSA_ID" --priority urgent --output json) || { echo "FAILED to create alert issue" >&2; exit 1; }
 new=$(jq -er .id <<<"$out") || { echo "created an issue but cannot parse its id" >&2; exit 1; }
-multica issue metadata set "$new" --key alert_key --value ema-hindsight-route >/dev/null \
+multica issue metadata set "$new" --key alert_key --value "$ALERT_KEY" >/dev/null \
   || { echo "created $new but metadata set failed: the next run may duplicate it" >&2; exit 1; }
 echo "created alert issue $new"

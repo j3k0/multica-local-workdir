@@ -175,6 +175,10 @@ Since 2026-11-25 (FOV-2962) the bank uses no model for retain either:
 Retain stores raw chunks (only TEI embeddings run). The route above is now only used by
 reflect, which still times out at 300 s on the tripster pool.
 
+`agent-intern` has the same four settings and, since 2026-11-25, the same route
+(`agent-intern=qwen3.8-flash-next`): Intern loads no memory plugin, but the Hindsight API and
+`/mcp/` take no auth on the tailnet, so anyone could reflect on his bank.
+
 - Deployed copy: `/opt/projects/tools/hindsight/ext/`, mounted read-only at `/opt/fovea-ext`.
   Env in the compose file: `PYTHONPATH`, `HINDSIGHT_API_LLM_REQUEST_EXTENSION`,
   `HINDSIGHT_API_LLM_REQUEST_BANK_MODELS`, `HINDSIGHT_API_LLM_REQUEST_TIMEOUT`.
@@ -188,14 +192,25 @@ reflect, which still times out at 300 s on the tripster pool.
 - Watch: `ema-route-check.sh` (timer `ema-route-check.timer`, every 15 min) opens one urgent issue
   for DSA if any of these happens: Ema's bank (key `agent/ema`, metadata `hindsight_bank`) is
   missing from the route map, the extension logged no route at startup, reranking is back on,
-  one of the no-model settings is undone, or (only outside chunks mode) the bank was active
-  with no routed call. Spend logs can't do this: Hindsight's rows carry
-  no bank id. `--dry-run` prints the verdict.
+  one of the no-model settings is undone, the bank made a model call (consolidation, reflect,
+  or retain outside chunks mode) with no routed call, or Hindsight's `llm_requests` shows a
+  call for the bank on any model other than its route (hosted LLM or OpenRouter rerank).
+  Spend logs can't do the last one: their rows carry no bank id. `--dry-run` prints the verdict.
+  `intern-route-check.timer` runs the same script with `ROUTE_BANK=agent-intern`
+  (`alert_key=intern-hindsight-route`).
+- Alert "no-model settings undone": someone changed the bank config. Re-apply with
+  `curl -X PATCH 127.0.0.1:18888/v1/default/banks/<bank>/config -H 'content-type: application/json'
+  -d '{"updates":{"retain_extraction_mode":"chunks","enable_observations":false,"enable_auto_consolidation":false,"enable_reranking":false}}'`,
+  then find out who changed it (`docker logs hindsight | grep 'Updated bank config for <bank>'`).
+  Facts extracted while it was undone went to the routed model, not a hosted one, as long as
+  the route check is clean.
+- Cancelling a running job: `DELETE .../operations/<id>` only marks it `cancelled`; a job
+  already inside an LLM call keeps running until Hindsight restarts (FOV-2962).
 - Queue: `curl -s '127.0.0.1:18888/v1/default/banks/agent-ema/operations?status=pending' | jq .total`.
   Ema saves at most ~11 times a day (gate log, 14 days), so about 3.3 h/day of pool time, no backlog.
 - Known limits: the tripster pool takes ~6 min per retain call (async, fine) and ~12 min
   per consolidation call. Reflect has a server-wide 300 s wall clock, so a reflect on
-  `agent-ema` times out. Ema hasn't called reflect in 14 days and has no mental models.
+  `agent-ema` times out; the tripster call behind it keeps running (one ran 588 s). Ema hasn't called reflect in 14 days and has no mental models.
   Calls that Hindsight doesn't tie to a bank keep the server LLM; none were seen.
 - Undo: remove those 4 env lines and the `./ext` mount, then `docker compose up -d`; disable
-  `ema-route-check.timer` too, or it alerts.
+  `ema-route-check.timer` and `intern-route-check.timer` too, or they alert.

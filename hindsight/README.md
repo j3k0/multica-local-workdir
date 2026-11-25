@@ -170,6 +170,11 @@ Live since 2026-11-24 on devbox3: `agent-ema` → `qwen3.8-flash-next` (tripster
 no hosted fallback), so her memory stays in house (register row K2, FOV-2938). The bank
 also has `enable_reranking=false` (no OpenRouter rerank) and `consolidation_llm_parallelism=1`.
 
+Since 2026-11-25 (FOV-2962) the bank uses no model for retain either:
+`retain_extraction_mode=chunks`, `enable_observations=false`, `enable_auto_consolidation=false`.
+Retain stores raw chunks (only TEI embeddings run). The route above is now only used by
+reflect, which still times out at 300 s on the tripster pool.
+
 - Deployed copy: `/opt/projects/tools/hindsight/ext/`, mounted read-only at `/opt/fovea-ext`.
   Env in the compose file: `PYTHONPATH`, `HINDSIGHT_API_LLM_REQUEST_EXTENSION`,
   `HINDSIGHT_API_LLM_REQUEST_BANK_MODELS`, `HINDSIGHT_API_LLM_REQUEST_TIMEOUT`.
@@ -183,7 +188,8 @@ also has `enable_reranking=false` (no OpenRouter rerank) and `consolidation_llm_
 - Watch: `ema-route-check.sh` (timer `ema-route-check.timer`, every 15 min) opens one urgent issue
   for DSA if any of these happens: Ema's bank (key `agent/ema`, metadata `hindsight_bank`) is
   missing from the route map, the extension logged no route at startup, reranking is back on,
-  or the bank was active with no routed call. Spend logs can't do this: Hindsight's rows carry
+  one of the no-model settings is undone, or (only outside chunks mode) the bank was active
+  with no routed call. Spend logs can't do this: Hindsight's rows carry
   no bank id. `--dry-run` prints the verdict.
 - Queue: `curl -s '127.0.0.1:18888/v1/default/banks/agent-ema/operations?status=pending' | jq .total`.
   Ema saves at most ~11 times a day (gate log, 14 days), so about 3.3 h/day of pool time, no backlog.

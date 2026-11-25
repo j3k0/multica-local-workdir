@@ -4,8 +4,11 @@
 # silently stops (an upgrade, a compose edit, a bank rename):
 #  1. Ema's bank (LiteLLM key $EMA_KEY_ALIAS, metadata hindsight_bank) is not in the route map.
 #  2. The extension did not log its route map since the container last started.
-#  3. Reranking is back on for the bank (that path goes to OpenRouter).
-#  4. The bank had retain/consolidation activity in the last 20 min but no routed call in 60 min.
+#  3. Reranking is back on for the bank (that path goes to OpenRouter), or one of the no-model
+#     settings (FOV-2962) is undone: retain_extraction_mode=chunks, enable_observations=false,
+#     enable_auto_consolidation=false.
+#  4. Only if the bank is not in chunks mode: retain/consolidation activity in the last 20 min
+#     but no routed call in 60 min. In chunks mode retain makes no LLM call at all.
 # LiteLLM_SpendLogs can't help here: Hindsight's rows carry no bank id, and other banks use the
 # hosted `memory` alias with the same key all the time.
 # Alert = one open urgent Multica issue (metadata alert_key=ema-hindsight-route), assigned to DSA.
@@ -49,9 +52,14 @@ if [[ -n "$bank" ]]; then
   elif [[ $(jq -r '.config.enable_reranking' <<<"${cfg%$'\n'*}") != false ]]; then
     problems+=("enable_reranking is not false on $bank: its recalls are reranked on OpenRouter")
   fi
+  mode=$(jq -r '.config.retain_extraction_mode' <<<"${cfg%$'\n'*}" 2>/dev/null)
+  nomodel=$(jq -r '.config | "\(.retain_extraction_mode) \(.enable_observations) \(.enable_auto_consolidation)"' <<<"${cfg%$'\n'*}" 2>/dev/null)
+  if [[ "$code" == 200 && "$nomodel" != "chunks false false" ]]; then
+    problems+=("$bank no-model settings undone (mode/observations/auto-consolidation = $nomodel, want chunks false false; FOV-2962)")
+  fi
   active=$(docker logs --since 20m hindsight 2>&1 | grep -cE "RETAIN_BATCH START: $bank\$|\[CONSOLIDATION\] bank=$bank llm_batch")
   routed=$(docker logs --since 60m hindsight 2>&1 | grep -c "bank_llm_routes: bank=$bank ")
-  if (( active > 0 && routed == 0 )); then
+  if [[ "$mode" != chunks ]] && (( active > 0 && routed == 0 )); then
     problems+=("$bank had $active retain/consolidation batch(es) in 20 min but no routed LLM call in 60 min")
   fi
 fi

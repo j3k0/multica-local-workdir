@@ -1,0 +1,12 @@
+[Unit]
+Description=Alert when IAPGSUP's Hindsight bank calls a hosted model (FOV-2971, register row K1)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=%h
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin:%h/bin
+TimeoutStartSec=180
+Environment=ROUTE_BANK=agent-iapgsup
+Environment=ALERT_KEY=iapgsup-hindsight-route
+ExecStart=/opt/projects/tools/multica-local-workdir/hindsight/ema-route-check.sh

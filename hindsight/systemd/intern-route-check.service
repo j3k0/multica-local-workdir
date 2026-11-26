@@ -6,7 +6,8 @@ After=network-online.target
 Type=oneshot
 Environment=HOME=%h
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin:%h/bin
-TimeoutStartSec=180
+# Worst case: gate-less config/routed reads plus the probe (2x20 read, 20+20 PATCH+re-read, 60 recall, psql), FOV-3011
+TimeoutStartSec=240
 Environment=ROUTE_BANK=agent-intern
 Environment=ALERT_KEY=intern-hindsight-route
 ExecStart=/opt/projects/tools/multica-local-workdir/hindsight/ema-route-check.sh

@@ -22,13 +22,14 @@
 # FOV-3002a -- maximum silence ~45 min with cycle timing), then alert as an outage instead.
 # Alert = one open urgent Multica issue (metadata alert_key=$ALERT_KEY), assigned to DSA.
 # Other banks: ROUTE_BANK=<bank> ALERT_KEY=<key> (no LiteLLM key lookup), e.g. agent-intern.
-# Usage: ema-route-check.sh [--dry-run]
+# Usage: ema-route-check.sh [--dry-run]   (--dry-run still records and clears down-since state)
 set -uo pipefail
 DRY=0; [[ "${1:-}" == "--dry-run" ]] && DRY=1
 KEY_ALIAS="${EMA_KEY_ALIAS:-agent/ema}"
 HS=http://127.0.0.1:18888/v1/default
 DSA_ID=4c8d7afb-acdc-4f89-a96a-3ff709b2959c
 ALERT_KEY="${ALERT_KEY:-ema-hindsight-route}"
+[[ "$ALERT_KEY" =~ ^[a-z0-9-]+$ ]] || { echo "ALERT_KEY \"$ALERT_KEY\" is not safe for a state-file path" >&2; exit 1; }
 export MULTICA_WORKSPACE_ID="${MULTICA_WORKSPACE_ID:-7253250f-2139-4450-811b-2f08dd69a242}"
 problems=()
 
@@ -65,15 +66,21 @@ elif [[ ! -s "$state_file" ]]; then
     exit 0
   fi
   # cannot persist down-since: never risk permanent silence, alert now
-  down_hard=1; mins=0; down_since="(cannot persist state in $state_file)"
-  problems+=("Hindsight unreachable (probe HTTP $gate_code) and down-since cannot be persisted: alerting rather than staying silent")
+  down_hard="no-state"
+  problems+=("Hindsight unreachable (probe config HTTP $gate_code, db ${gate_db_out:-no answer}) and down-since cannot be persisted in $state_dir: alerting rather than staying silent")
 else
   down_since=$(<"$state_file")
-  since=$(date -d "$down_since" +%s 2>/dev/null) || since=0
-  age=$(( $(date +%s) - since ))
+  now=$(date +%s)
+  if ! since=$(date -d "$down_since" +%s 2>/dev/null) || (( since > now )); then
+    # unparsable or from a clock jump: restart the grace clock rather than trust it
+    date -u +%FT%TZ > "$state_file" 2>/dev/null
+    echo "Hindsight unreachable (corrupt down-since record restarted): staying quiet until $((DOWN_GRACE / 60)) min of down time (FOV-3002a)"
+    exit 0
+  fi
+  age=$(( now - since ))
   if (( age >= DOWN_GRACE )); then
-    down_hard=1; mins=$(( age / 60 ))
-    problems+=("Hindsight unreachable for $mins min (down since $down_since): restart grace ($((DOWN_GRACE / 60)) min) over -- an outage, not a restart")
+    down_hard="grace-over"; mins=$(( age / 60 ))
+    problems+=("Hindsight unreachable for $mins min (down since $down_since, probe config HTTP $gate_code, db ${gate_db_out:-no answer}): restart grace ($((DOWN_GRACE / 60)) min) over -- an outage, not a restart")
     # falls through to the create block; the live checks below are skipped (down_hard), they
     # would only repeat the connection errors
   else
@@ -183,25 +190,29 @@ echo "ALERT:"; echo "$problem"
 
 title="OPS: Hindsight bank $bank may be leaving the house"
 tldr="TL;DR: Hindsight bank $bank may be using hosted models again (Ema: register row K2, FOV-2938; Intern: FOV-2962). Fix the routing (runbook: multica-local-workdir hindsight/README.md, \"Per-bank LLM routing\")."
-if [[ -n "$down_hard" ]]; then
+if [[ "$down_hard" == grace-over ]]; then
   title="OPS: Hindsight down for $mins min (restart grace over)"
-  tldr="TL;DR: Hindsight has been unreachable for $mins min (down since $down_since) -- the $((DOWN_GRACE / 60)) min restart grace in \`hindsight/ema-route-check.sh\` (FOV-3002a) expired. Restart it or treat as an outage; bank $bank routing cannot be checked while it is down."
+  tldr="TL;DR: Hindsight has been unreachable for $mins min (down since $down_since) -- the $((DOWN_GRACE / 60)) min restart grace in \`hindsight/ema-route-check.sh\` (FOV-3002a) expired. Restart it or treat as an outage; ${bank:+bank $bank }routing cannot be checked while it is down."
+elif [[ "$down_hard" == no-state ]]; then
+  title="OPS: Hindsight unreachable (down-time record unwritable)"
+  tldr="TL;DR: Hindsight is unreachable (config HTTP $gate_code) and the route check cannot record down time under \`$state_dir\`, so it alerts immediately rather than risking permanent silence (FOV-3002a). Fix the filesystem; meanwhile the check keeps paging while Hindsight is down."
 fi
+# Outage alerts dedupe under their own key so an open routing issue cannot silence them.
+alert_key="$ALERT_KEY"
+[[ -n "$down_hard" ]] && alert_key="$ALERT_KEY-outage"
 
-if ! list=$(multica issue list --metadata "alert_key=$ALERT_KEY" --limit 50 --output json --fields id,status); then
+if ! list=$(multica issue list --metadata "alert_key=$alert_key" --limit 50 --output json --fields id,status); then
   echo "multica issue list failed; not creating an issue (would risk duplicates)" >&2; exit 1
 fi
 open=$(jq -r '(if type=="object" then .issues else . end)[] | select(.status|IN("cancelled","done","released")|not) | .id' <<<"$list" | head -1) \
   || { echo "cannot parse multica issue list output" >&2; exit 1; }
 [[ -n "$open" ]] && { echo "already open: $open"; exit 0; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT; cd "$tmp"
-printf '%s\n\n%s\n\n%s\n' \
-  "TL;DR: Hindsight bank $bank may be using hosted models again (Ema: register row K2, FOV-2938; Intern: FOV-2962). Fix the routing (runbook: multica-local-workdir hindsight/README.md, \"Per-bank LLM routing\")." \
-  "$problem" \
+printf '%s\n\n%s\n\n%s\n' "$tldr" "$problem" \
   "Raised by \`hindsight/ema-route-check.sh\` on devbox3 (timer \`ema-route-check.timer\` or \`intern-route-check.timer\`, FOV-2945). It stays quiet while this issue is open." > description.md
 out=$(multica issue create --title "$title" --description-file description.md \
   --assignee-id "$DSA_ID" --priority urgent --output json) || { echo "FAILED to create alert issue" >&2; exit 1; }
 new=$(jq -er .id <<<"$out") || { echo "created an issue but cannot parse its id" >&2; exit 1; }
-multica issue metadata set "$new" --key alert_key --value "$ALERT_KEY" >/dev/null \
+multica issue metadata set "$new" --key alert_key --value "$alert_key" >/dev/null \
   || { echo "created $new but metadata set failed: the next run may duplicate it" >&2; exit 1; }
 echo "created alert issue $new"

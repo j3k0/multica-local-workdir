@@ -54,10 +54,40 @@ echo 2026-10-24T10:00:00Z > "$XDG_STATE_HOME/hindsight-route-check/down-rt"
 out=$(ALERT_KEY=rt PATH=$RP "$H/ema-route-check.sh" --dry-run 2>/dev/null)
 check "down: grace over alerts as an outage, no routing noise" \
   '[[ "$out" == *"ALERT:"* && "$out" == *"Hindsight unreachable for"*"an outage, not a restart"* && "$out" != *"connection refused"* ]]'
-printf '#!/bin/sh\necho "$@" >> '"$T"'/rc-calls\ncase "$2" in list) echo "[]";; create) echo "{\\"id\\":\\"NEW1\\"}";; metadata) exit 0;; get) echo "{}";; esac\n' > "$T/rcbin/multica"; chmod +x "$T/rcbin/multica"
+export RC_CALLS="$T/rc-calls"
+cat > "$T/rcbin/multica" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$RC_CALLS"
+case "$2" in
+  list) echo "[]";;
+  create) echo '{"id":"NEW1"}';;
+  metadata) exit 0;;
+  get) echo "{}";;
+esac
+f=$(printf '%s\n' "$*" | sed -n 's/.*--description-file \([^ ]*\).*/\1/p')
+[[ -n "$f" ]] && cat "$f" >> "$RC_CALLS"
+exit 0
+STUB
+chmod +x "$T/rcbin/multica"
 ALERT_KEY=rt PATH=$RP "$H/ema-route-check.sh" >/dev/null 2>&1
-check "down: grace over creates the outage issue (own title, no duplicate)" \
-  '[[ "$(grep -c "issue create" "$T/rc-calls")" = 1 ]] && grep -q "OPS: Hindsight down for" "$T/rc-calls"'
+check "down: grace over creates the outage issue: own title, key and description" \
+  '[[ "$(grep -c "issue create" "$T/rc-calls")" = 1 ]] && grep -q "OPS: Hindsight down for" "$T/rc-calls" \
+     && grep -q "rt-outage" "$T/rc-calls" && grep -q "unreachable for" "$T/rc-calls" \
+     && ! grep -q "may be using hosted models" "$T/rc-calls"'
+gracereset
+printf '#!/bin/sh\nexit 1\n' > "$T/rcbin/docker"; chmod +x "$T/rcbin/docker"
+printf '#!/bin/sh\nprintf 000\n' > "$T/rcbin/curl"; chmod +x "$T/rcbin/curl"
+echo not-a-date > "$XDG_STATE_HOME/hindsight-route-check/down-rt"
+out=$(ALERT_KEY=rt PATH=$RP "$H/ema-route-check.sh" --dry-run 2>/dev/null)
+check "down: unparsable down-since restarts the grace clock" \
+  '[[ "$out" == *"corrupt down-since record restarted"* && "$out" != *"ALERT"* \
+     && "$(cat "$XDG_STATE_HOME/hindsight-route-check/down-rt")" =~ ^2[0-9][0-9][0-9]- ]]'
+echo 2076-10-24T10:00:00Z > "$XDG_STATE_HOME/hindsight-route-check/down-rt"
+out=$(ALERT_KEY=rt PATH=$RP "$H/ema-route-check.sh" --dry-run 2>/dev/null)
+check "down: future-timestamped record restarts the clock too" \
+  '[[ "$out" == *"corrupt down-since record restarted"* && "$out" != *"ALERT"* ]]'
+out=$(ALERT_KEY='../../evil' PATH=$RP "$H/ema-route-check.sh" --dry-run 2>/dev/null); rc=$?
+check "unsafe ALERT_KEY refuses to run" '[[ "$rc" -eq 1 && -z "$out" ]]' 
 gracereset
 echo 2026-10-24T10:00:00Z > "$XDG_STATE_HOME/hindsight-route-check/down-rt"
 printf '#!/bin/sh\ncase "$1.$2" in\n  exec.*) case "$*" in *litellm-postgres*) echo agent-ema;; *"select 1"*) echo 1;; *"route-check-probe"*) echo 1;; *) echo "0 0";; esac;;\n  inspect.*) case "$*" in *"Config.Env"*) echo "HINDSIGHT_API_LLM_REQUEST_BANK_MODELS=agent-ema=qwen3.8-flash-next";; *) date -u -d "-5 min" +%FT%%TZ;; esac;;\n  logs.*) case "$3" in 60m) echo "bank_llm_routes: bank=agent-ema routed";; *) echo "bank_llm_routes: routing '"'"'agent-ema'"'"'";; esac;;\nesac\n' > "$T/rcbin/docker"; chmod +x "$T/rcbin/docker"

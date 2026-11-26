@@ -14,7 +14,10 @@
 #     LiteLLM_SpendLogs don't, so they can't be used for this. To trust this the server must be
 #     seen writing llm_requests: the check recalls on a scratch bank, whose one query embedding
 #     must land as a row. Quiet hours write no rows for ~70 min legitimately (FOV-3010), so a
-#     row-count canary alone could not tell "quiet" from "tracing off".
+#     row-count canary alone could not tell "quiet" from "tracing off". The probe itself never
+#     spends: its bank is held in the no-model set with rerank off, the recall runs only when
+#     rerank=false is verified (FOV-3011), and connectivity blips alert only after two consecutive
+#     runs (FOV-3011).
 # Alert = one open urgent Multica issue (metadata alert_key=$ALERT_KEY), assigned to DSA.
 # Other banks: ROUTE_BANK=<bank> ALERT_KEY=<key> (no LiteLLM key lookup), e.g. agent-intern.
 # Usage: ema-route-check.sh [--dry-run]
@@ -34,9 +37,22 @@ bank=${ROUTE_BANK:-${EMA_BANK:-}}
 if [[ ! "$bank" =~ ^[a-z0-9-]+$ ]]; then
   problems+=("cannot read the bank of key $KEY_ALIAS from LiteLLM (got: ${bank:0:100})"); bank=""
 fi
-routes=$(docker inspect hindsight --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-  | sed -n 's/^HINDSIGHT_API_LLM_REQUEST_BANK_MODELS=//p')
+cenv=$(docker inspect hindsight --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null)
+routes=$(sed -n 's/^HINDSIGHT_API_LLM_REQUEST_BANK_MODELS=//p' <<<"$cenv")
 alias=$(tr ',' '\n' <<<"$routes" | sed -n "s/^$bank=\([^=]*\)$/\1/p" | head -1)
+# Tracing must reach llm_requests unfiltered, or calls stop landing in the table while the probe
+# keeps tracing its own scope: every check that reads the table goes blind (FOV-3011). Unset is
+# enabled and traces all scopes; only a value that turns it off or narrows scopes is a problem.
+if [[ -n "$cenv" ]]; then
+  tstate=$(sed -n 's/^HINDSIGHT_API_LLM_TRACE_ENABLED=//p' <<<"$cenv")
+  tscopes=$(sed -n 's/^HINDSIGHT_API_LLM_TRACE_SCOPES=//p' <<<"$cenv")
+  txscopes=$(sed -n 's/^HINDSIGHT_API_LLM_TRACE_EXCLUDE_SCOPES=//p' <<<"$cenv")
+  if [[ -n "$(tr -d '[:space:]' <<<"$tscopes$txscopes")" ]]; then
+    problems+=("HINDSIGHT_API_LLM_TRACE{,_EXCLUDE}_SCOPES are set (scopes=$tscopes exclude=$txscopes): calls outside those scopes stop landing in llm_requests and the hosted-call check can go blind")
+  elif [[ -n "$tstate" && "$(tr -d '[:space:]' <<<"$tstate" | tr '[:upper:]' '[:lower:]')" != true ]]; then
+    problems+=("HINDSIGHT_API_LLM_TRACE_ENABLED=$tstate (want unset or true): llm_requests tracing is off, the hosted-call check is blind")
+  fi
+fi
 if [[ -n "$bank" && -z "$alias" ]]; then
   problems+=("bank $bank is not in HINDSIGHT_API_LLM_REQUEST_BANK_MODELS (\"$routes\"): its LLM calls use the hosted server model")
 fi
@@ -92,37 +108,118 @@ if [[ -n "$bank" ]]; then
   fi
 fi
 
-# Tracing probe (FOV-3010): a recall on a scratch bank must leave one llm_requests row -- its
-# query embedding. That proves the write path behind the hosted-call check regardless of traffic:
-# server-wide row counts are legitimately zero for up to ~70 min in quiet hours (the old canary
-# false-alerted at night), but a real recall always traces.
-PROBE_BANK=route-check-probe   # scratch: no memories, rerank off; its rows are swept by retention
+# Tracing probe (FOV-3010, hardened in FOV-3011): a recall on a scratch bank must leave a NEW
+# llm_requests row since this run started -- its query embedding. That proves the write path
+# behind the hosted-call check regardless of traffic: server-wide row counts are legitimately
+# zero for up to ~70 min in quiet hours (the old canary false-alerted at night), but a real
+# recall always traces. Rows are written by the tracing buffer (flushed every 0.5 s), so they
+# can land after the 200 response: counting a baseline first and requiring an increase, with the
+# 3 s retry, is what makes the check sound -- and it keeps a same-minute sibling timer run from
+# passing on the other run's row (both timers fire on *:0/15, FOV-3011).
+PROBE_BANK=route-check-probe   # scratch: no memories; held in the no-model set below, rerank off
+# Connectivity-class probe failures (no HTTP answer for our calls, psql refuses) alert only on
+# the second consecutive run: a single-run blip used to open an urgent issue that silenced the
+# whole check until a human closed it (FOV-3002 pattern). Definitive failures (401/403/HTTP,
+# no row) alert at once. State file like openrouter-alert.sh, cleared on every clean verdict.
+PROBE_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/ema-route-check"; mkdir -p "$PROBE_STATE_DIR"
+PROBE_DOWN="$PROBE_STATE_DIR/probe-connectivity-failed"
+probe_conn_fail() {  # 0: second consecutive failure, alert now; 1: recorded, stay quiet this run
+  if [[ -e "$PROBE_DOWN" ]]; then rm -f "$PROBE_DOWN"; problems+=("$1"); return 0; fi
+  printf '%s\n' "first failure at $(date -u '+%FT%TZ'): $1" >"$PROBE_DOWN" 2>/dev/null || true
+  echo "probe connectivity failure, not alerting yet (one more run opens an alert): $1"; return 1
+}
+probe_ok() { rm -f "$PROBE_DOWN" 2>/dev/null || true; }
 probe_rows() { docker exec hindsight sh -c 'PGPASSWORD=$(python3 -c "import json;print(json.load(open(\"/home/hindsight/.pg0/instances/hindsight/instance.json\"))[\"password\"])") \
   /home/hindsight/.pg0/installation/*/bin/psql -h 127.0.0.1 -U hindsight -d hindsight -Atc \
   "select count(*) from llm_requests where bank_id='"'"'$0'"'"' and started_at > now()-interval '"'"'5 minutes'"'"'"' "$PROBE_BANK" 2>&1; }
-curl -s -m 20 -o /dev/null -X PUT "$HS/banks/$PROBE_BANK" -H 'content-type: application/json' -d "{\"name\":\"$PROBE_BANK\"}"
-rcfg=$(curl -s -m 20 "$HS/banks/$PROBE_BANK/config" | jq -r '.config.enable_reranking')
-[[ "$rcfg" == false ]] || curl -s -m 20 -o /dev/null -X PATCH "$HS/banks/$PROBE_BANK/config" \
-  -H 'content-type: application/json' -d '{"updates":{"enable_reranking":false}}'
-probe=$(curl -s -m 60 -w '\n%{http_code}' -X POST "$HS/banks/$PROBE_BANK/memories/recall" \
-  -H 'content-type: application/json' -d '{"query":"route check tracing probe"}')
-pcode=${probe##*$'\n'}
-if [[ -z "$pcode" ]]; then
-  problems+=("recall tracing probe got no response (recall endpoint unreachable or timed out)")
-elif [[ "$pcode" == 401 ]]; then
-  problems+=("recall tracing probe: authentication failed (HTTP 401)")
-elif [[ "$pcode" == 403 ]]; then
-  problems+=("recall tracing probe: permission denied (HTTP 403)")
-elif [[ "$pcode" != 200 ]]; then
-  pbody=${probe%$'\n'*}
-  problems+=("recall tracing probe: HTTP $pcode ${pbody:0:200}")
+before=$(probe_rows)   # baseline: both timers can put their rows inside this 5-min window
+proceed=1              # recall only once enable_reranking=false is verified for this run
+pcode=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X PUT "$HS/banks/$PROBE_BANK" \
+  -H 'content-type: application/json' -d "{\"name\":\"$PROBE_BANK\"}")
+if [[ "$pcode" == 000 ]]; then
+  probe_conn_fail "probe bank $PROBE_BANK unreachable (HTTP 000)" || true; proceed=0
+elif [[ "$pcode" != 2* ]]; then
+  probe_ok; problems+=("creating probe bank $PROBE_BANK: HTTP $pcode"); proceed=0
 else
-  prow=$(probe_rows)   # the row lands with the query embedding, before the response
-  if [[ "$prow" == 0 ]]; then sleep 3; prow=$(probe_rows); fi
-  if [[ ! "$prow" =~ ^[0-9]+$ ]]; then
-    problems+=("cannot read llm_requests for the tracing probe (got: ${prow:0:200})")
-  elif (( prow == 0 )); then
-    problems+=("recall tracing probe succeeded but wrote no llm_requests row: LLM tracing is off, so the hosted-call check is blind")
+  pcfg=$(curl -s -m 20 -w '\n%{http_code}' "$HS/banks/$PROBE_BANK/config")
+  pcode=${pcfg##*$'\n'}
+  pstate=$(jq -r '.config | "\(.enable_reranking) \(.retain_extraction_mode) \(.enable_observations) \(.enable_auto_consolidation)"' <<<"${pcfg%$'\n'*}" 2>/dev/null)
+  if [[ "$pcode" == 401 ]]; then
+    probe_ok; problems+=("reading $PROBE_BANK config: authentication failed (HTTP 401)"); proceed=0
+  elif [[ "$pcode" == 403 ]]; then
+    probe_ok; problems+=("reading $PROBE_BANK config: permission denied (HTTP 403)"); proceed=0
+  elif [[ "$pcode" != 200 ]]; then
+    if [[ "$pcode" == 000 ]]; then probe_conn_fail "reading $PROBE_BANK config: no response (HTTP 000)" || true
+    else probe_ok; problems+=("reading $PROBE_BANK config: HTTP $pcode ${pcfg%$'\n'*}"); fi
+    proceed=0
+  elif [[ "$pstate" == "false chunks false false" ]]; then
+    probe_ok
+  else
+    # One PATCH for all four: rerank off (recalls would rerank on OpenRouter) plus the agent-ema
+    # no-model set, so any stray retain into the bank stays in house (FOV-2962, FOV-3011).
+    # Status-checked and re-read back: a failed PATCH silently spent hosted money per recall.
+    ppatch=$(curl -s -m 20 -w '\n%{http_code}' -X PATCH "$HS/banks/$PROBE_BANK/config" \
+      -H 'content-type: application/json' \
+      -d '{"updates":{"enable_reranking":false,"retain_extraction_mode":"chunks","enable_observations":false,"enable_auto_consolidation":false}}')
+    ppc=${ppatch##*$'\n'}
+    if [[ "$ppc" == 401 ]]; then
+      probe_ok; problems+=("PATCHing $PROBE_BANK config: authentication failed (HTTP 401): probe recalls would rerank on OpenRouter"); proceed=0
+    elif [[ "$ppc" == 403 ]]; then
+      probe_ok; problems+=("PATCHing $PROBE_BANK config: permission denied (HTTP 403): probe recalls would rerank on OpenRouter"); proceed=0
+    elif [[ "$ppc" != 200 ]]; then
+      if [[ "$ppc" == 000 ]]; then probe_conn_fail "PATCHing $PROBE_BANK config: no response (HTTP 000)" || true
+      else probe_ok; problems+=("PATCHing $PROBE_BANK config failed (HTTP $ppc): probe recalls would rerank on OpenRouter"); fi
+      proceed=0
+    else
+      pver=$(curl -s -m 20 -w '\n%{http_code}' "$HS/banks/$PROBE_BANK/config")
+      pvc=${pver##*$'\n'}
+      vstate=$(jq -r '.config | "\(.enable_reranking) \(.retain_extraction_mode) \(.enable_observations) \(.enable_auto_consolidation)"' <<<"${pver%$'\n'*}" 2>/dev/null)
+      if [[ "$vstate" == "false chunks false false" ]]; then
+        probe_ok
+      elif [[ "${vstate%% *}" != false ]]; then
+        # Rerank is what spends: without a verified rerank=false the recall would create
+        # OpenRouter spend, so skip it and let the alert issue carry the reason (FOV-3011).
+        if [[ "$pvc" == 000 ]]; then probe_conn_fail "verifying $PROBE_BANK config after PATCH: no response (HTTP 000)" || true
+        else
+          probe_ok
+          if [[ "$pvc" == 401 || "$pvc" == 403 ]]; then
+            problems+=("verifying $PROBE_BANK config after the rerank-off PATCH: HTTP $pvc -- rerank state unknown, recall skipped")
+          else
+            problems+=("$PROBE_BANK rerank still on after the rerank-off PATCH (config: $vstate): probe recalls would rerank on OpenRouter -- hosted spend, recall skipped")
+          fi
+        fi
+        proceed=0
+      else
+        probe_ok  # rerank off, but the no-model settings did not take: recall itself is safe
+        problems+=("$PROBE_BANK no-model settings did not take after PATCH (config: $vstate, want 'false chunks false false'): a future retain into it would use the hosted model")
+      fi
+    fi
+  fi
+fi
+if (( proceed )); then
+  probe=$(curl -s -m 60 -w '\n%{http_code}' -X POST "$HS/banks/$PROBE_BANK/memories/recall" \
+    -H 'content-type: application/json' -d '{"query":"route check tracing probe"}')
+  pcode=${probe##*$'\n'}
+  if [[ -z "$pcode" ]]; then
+    probe_conn_fail "recall tracing probe got no response (recall endpoint unreachable or timed out)" || true
+  elif [[ "$pcode" == 401 ]]; then
+    probe_ok; problems+=("recall tracing probe: authentication failed (HTTP 401)")
+  elif [[ "$pcode" == 403 ]]; then
+    probe_ok; problems+=("recall tracing probe: permission denied (HTTP 403)")
+  elif [[ "$pcode" != 200 ]]; then
+    probe_ok; pbody=${probe%$'\n'*}; problems+=("recall tracing probe: HTTP $pcode ${pbody:0:200}")
+  else
+    prow=$(probe_rows)
+    # Equal to baseline (or zero with a failed baseline) can mean the buffered row is not in yet.
+    if [[ "$prow" == "$before" || ( ! "$before" =~ ^[0-9]+$ && "$prow" == 0 ) ]]; then sleep 3; prow=$(probe_rows); fi
+    if [[ ! "$prow" =~ ^[0-9]+$ ]]; then
+      probe_conn_fail "cannot read llm_requests for the tracing probe (got: ${prow:0:150})" || true
+    elif [[ ( "$before" =~ ^[0-9]+$ && "$prow" -le "$before" ) || "$prow" == 0 ]]; then
+      probe_ok
+      problems+=("recall tracing probe succeeded but llm_requests gained no NEW row (after=$prow, baseline=${before:-failed}): LLM tracing is off, so the hosted-call check is blind")
+    else
+      probe_ok
+    fi
   fi
 fi
 

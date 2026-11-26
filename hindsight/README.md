@@ -200,6 +200,9 @@ reflect, which still times out at 300 s on the tripster pool.
   (rerank off, no memories) and requires the recall to have traced one `llm_requests` row --
   proof the table is still being written. A server-wide row-count canary would not do: quiet
   hours write no rows for up to ~70 min and false-alerted at night (FOV-3010).
+  If Hindsight itself is unreachable (HTTP 000 after one 30 s retry), the check prints
+  "Hindsight unreachable" and stays quiet: a restart reads exactly like lost routing and
+  opened two false alerts on 2026-11-25 (FOV-3002, hardening approved in FOV-3002a).
   Spend logs can't do the hosted-call check: their rows carry no bank id. `--dry-run` prints
   the verdict.
   `intern-route-check.timer` runs the same script with `ROUTE_BANK=agent-intern`

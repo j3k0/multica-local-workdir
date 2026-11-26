@@ -15,6 +15,10 @@
 #     seen writing llm_requests: the check recalls on a scratch bank, whose one query embedding
 #     must land as a row. Quiet hours write no rows for ~70 min legitimately (FOV-3010), so a
 #     row-count canary alone could not tell "quiet" from "tracing off".
+# Hindsight restarting looks identical to all five: its live reads fail (HTTP 000, connection
+# refused) -- the 2026-11-25 restart opened two such alerts 7 s after the container boot
+# (FOV-3002). The script probes first, and reports "Hindsight unreachable" without alerting
+# (FOV-3002a, JC's yes): a restart fixes itself, a real outage outlasts the next cycle.
 # Alert = one open urgent Multica issue (metadata alert_key=$ALERT_KEY), assigned to DSA.
 # Other banks: ROUTE_BANK=<bank> ALERT_KEY=<key> (no LiteLLM key lookup), e.g. agent-intern.
 # Usage: ema-route-check.sh [--dry-run]
@@ -33,6 +37,18 @@ bank=${ROUTE_BANK:-${EMA_BANK:-}}
   "select metadata->>'hindsight_bank' from \"LiteLLM_VerificationToken\" where key_alias='$KEY_ALIAS'" 2>&1)
 if [[ ! "$bank" =~ ^[a-z0-9-]+$ ]]; then
   problems+=("cannot read the bank of key $KEY_ALIAS from LiteLLM (got: ${bank:0:100})"); bank=""
+fi
+# Unreachability gate (FOV-3002a): the config and llm_requests reads below on a restarting
+# server give HTTP 000 and connection refused, indistinguishable from lost routing. Retry
+# once, then say unreachable and stay quiet. Any HTTP answer (even 404/401) means up.
+gate_url="$HS/banks/${bank:-route-check-probe}/config"
+hs_up() { [[ $(curl -s -m 10 -o /dev/null -w '%{http_code}' "$gate_url" 2>/dev/null) != 000 ]]; }
+if ! hs_up; then
+  sleep 30
+  if ! hs_up; then
+    echo "Hindsight unreachable (HTTP 000 after a 30 s retry): not alerting, restart window (FOV-3002a)"
+    exit 0
+  fi
 fi
 routes=$(docker inspect hindsight --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
   | sed -n 's/^HINDSIGHT_API_LLM_REQUEST_BANK_MODELS=//p')

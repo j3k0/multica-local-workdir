@@ -37,3 +37,31 @@ rm -f "$T/bin/curl"
 check "refresh exits 1 when the API is down" '! HINDSIGHT_API=http://127.0.0.1:9 PATH=$P "$H/daily-refresh.sh" >/dev/null 2>&1'
 mkdir -p "$XDG_STATE_HOME/openrouter-alert"; echo 2026-10-24T17:14:56Z > "$XDG_STATE_HOME/openrouter-alert/last-402"
 check "refresh skips within MIN_AGE of a 402" 'PATH=$P "$H/daily-refresh.sh" | grep -q "SKIP RUN: OpenRouter 402"'
+
+# --- ema-route-check unreachability gate (FOV-3002a): restart grace, down-hard alert ---
+RP="$T/rcbin:$P"
+gracereset() { rm -rf "$XDG_STATE_HOME/hindsight-route-check" "$T/rcbin" "$T/rc-calls"; mkdir -p "$T/rcbin" "$XDG_STATE_HOME/hindsight-route-check"; }
+gracereset
+printf '#!/bin/sh\nexit 1\n' > "$T/rcbin/docker"; chmod +x "$T/rcbin/docker"
+printf '#!/bin/sh\nprintf 000\n' > "$T/rcbin/curl"; chmod +x "$T/rcbin/curl"
+out=$(ALERT_KEY=rt PATH=$RP "$H/ema-route-check.sh" --dry-run 2>/dev/null)
+check "down: first cycle silent and records down-since" \
+  '[[ "$out" == *"staying quiet"* ]] && [[ "$out" != *"ALERT"* ]] && [[ -s "$XDG_STATE_HOME/hindsight-route-check/down-rt" ]]'
+out=$(ALERT_KEY=rt PATH=$RP "$H/ema-route-check.sh" --dry-run 2>/dev/null)
+check "down: second cycle within grace still silent" \
+  '[[ "$out" == *"still unreachable since"* ]] && [[ "$out" != *"ALERT"* ]]'
+echo 2026-10-24T10:00:00Z > "$XDG_STATE_HOME/hindsight-route-check/down-rt"
+out=$(ALERT_KEY=rt PATH=$RP "$H/ema-route-check.sh" --dry-run 2>/dev/null)
+check "down: grace over alerts as an outage, no routing noise" \
+  '[[ "$out" == *"ALERT:"* && "$out" == *"Hindsight unreachable for"*"an outage, not a restart"* && "$out" != *"connection refused"* ]]'
+printf '#!/bin/sh\necho "$@" >> '"$T"'/rc-calls\ncase "$2" in list) echo "[]";; create) echo "{\\"id\\":\\"NEW1\\"}";; metadata) exit 0;; get) echo "{}";; esac\n' > "$T/rcbin/multica"; chmod +x "$T/rcbin/multica"
+ALERT_KEY=rt PATH=$RP "$H/ema-route-check.sh" >/dev/null 2>&1
+check "down: grace over creates the outage issue (own title, no duplicate)" \
+  '[[ "$(grep -c "issue create" "$T/rc-calls")" = 1 ]] && grep -q "OPS: Hindsight down for" "$T/rc-calls"'
+gracereset
+echo 2026-10-24T10:00:00Z > "$XDG_STATE_HOME/hindsight-route-check/down-rt"
+printf '#!/bin/sh\ncase "$1.$2" in\n  exec.*) case "$*" in *litellm-postgres*) echo agent-ema;; *"select 1"*) echo 1;; *"route-check-probe"*) echo 1;; *) echo "0 0";; esac;;\n  inspect.*) case "$*" in *"Config.Env"*) echo "HINDSIGHT_API_LLM_REQUEST_BANK_MODELS=agent-ema=qwen3.8-flash-next";; *) date -u -d "-5 min" +%FT%%TZ;; esac;;\n  logs.*) case "$3" in 60m) echo "bank_llm_routes: bank=agent-ema routed";; *) echo "bank_llm_routes: routing '"'"'agent-ema'"'"'";; esac;;\nesac\n' > "$T/rcbin/docker"; chmod +x "$T/rcbin/docker"
+printf '#!/bin/sh\ncase "$*" in\n  *"-o /dev/null"*) :;;\n  */memories/recall*) :;;\n  *route-check-probe/config*) printf '"'"'{"config":{"enable_reranking":false}}'"'"';;\n  */config*) printf '"'"'{"config":{"enable_reranking":false,"retain_extraction_mode":"chunks","enable_observations":false,"enable_auto_consolidation":false}}'"'"';;\nesac\ncase "$*" in *http_code*) printf '"'"'\\n200\\n'"'"';; esac\n' > "$T/rcbin/curl"; chmod +x "$T/rcbin/curl"
+out=$(ALERT_KEY=rt PATH=$RP "$H/ema-route-check.sh" --dry-run 2>/dev/null)
+check "recovered: healthy run clears the down-since record" \
+  '[[ "$out" == "ok (bank=agent-ema)" ]] && [[ ! -e "$XDG_STATE_HOME/hindsight-route-check/down-rt" ]]'

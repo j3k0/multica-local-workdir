@@ -17,8 +17,9 @@
 #     row-count canary alone could not tell "quiet" from "tracing off".
 # Hindsight restarting looks identical to all five: its live reads fail (HTTP 000, connection
 # refused) -- the 2026-11-25 restart opened two such alerts 7 s after the container boot
-# (FOV-3002). The script probes first, and reports "Hindsight unreachable" without alerting
-# (FOV-3002a, JC's yes): a restart fixes itself, a real outage outlasts the next cycle.
+# (FOV-3002). A probe decides "up" (config HTTP < 500, and Hindsight's own Postgres answers
+# "select 1"); down cycles stay quiet for up to 30 min of down time (restart grace,
+# FOV-3002a -- maximum silence ~45 min with cycle timing), then alert as an outage instead.
 # Alert = one open urgent Multica issue (metadata alert_key=$ALERT_KEY), assigned to DSA.
 # Other banks: ROUTE_BANK=<bank> ALERT_KEY=<key> (no LiteLLM key lookup), e.g. agent-intern.
 # Usage: ema-route-check.sh [--dry-run]
@@ -38,27 +39,58 @@ bank=${ROUTE_BANK:-${EMA_BANK:-}}
 if [[ ! "$bank" =~ ^[a-z0-9-]+$ ]]; then
   problems+=("cannot read the bank of key $KEY_ALIAS from LiteLLM (got: ${bank:0:100})"); bank=""
 fi
-# Unreachability gate (FOV-3002a): the config and llm_requests reads below on a restarting
-# server give HTTP 000 and connection refused, indistinguishable from lost routing. Retry
-# once, then say unreachable and stay quiet. Any HTTP answer (even 404/401) means up.
+# Unreachability gate (FOV-3002a, PR #14 review): a restart looks like lost routing (HTTP 000,
+# connection refused on the live reads) and false-alerted on 2026-11-25. "Up" has to cover a
+# booting server, which can 503 or accept HTTP while its embedded Postgres is still
+# initialising: up = config HTTP < 500 AND Hindsight's own Postgres answering "select 1". The
+# first unreachable cycle records down-since and stays quiet; after $DOWN_GRACE of staying
+# down (crash loop, OOM, dead container) it alerts on its own below -- so the maximum silence
+# is the grace plus one 15-min cycle (~45 min). Successful cycles clear the record.
 gate_url="$HS/banks/${bank:-route-check-probe}/config"
-hs_up() { [[ $(curl -s -m 10 -o /dev/null -w '%{http_code}' "$gate_url" 2>/dev/null) != 000 ]]; }
-if ! hs_up; then
-  sleep 30
-  if ! hs_up; then
-    echo "Hindsight unreachable (HTTP 000 after a 30 s retry): not alerting, restart window (FOV-3002a)"
+DOWN_GRACE=1800
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/hindsight-route-check"
+state_file="$state_dir/down-$ALERT_KEY"
+gate_db() { docker exec hindsight sh -c 'PGPASSWORD=$(python3 -c "import json;print(json.load(open(\"/home/hindsight/.pg0/instances/hindsight/instance.json\"))[\"password\"])") \
+    /home/hindsight/.pg0/installation/*/bin/psql -h 127.0.0.1 -U hindsight -d hindsight -Atc "select 1"' 2>/dev/null; }
+down_hard=""
+gate_code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$gate_url" 2>/dev/null | tail -n1)
+gate_db_out=""
+[[ "$gate_code" != 000 && "$gate_code" -lt 500 ]] && gate_db_out=$(gate_db)
+if [[ "$gate_db_out" == 1 ]]; then
+  rm -f "$state_file" 2>/dev/null
+elif [[ ! -s "$state_file" ]]; then
+  mkdir -p "$state_dir" 2>/dev/null
+  if date -u +%FT%TZ > "$state_file" 2>/dev/null && [[ -s "$state_file" ]]; then
+    echo "Hindsight unreachable (probe HTTP $gate_code): staying quiet until $((DOWN_GRACE / 60)) min of down time -- restart grace (FOV-3002a)"
+    exit 0
+  fi
+  # cannot persist down-since: never risk permanent silence, alert now
+  down_hard=1; mins=0; down_since="(cannot persist state in $state_file)"
+  problems+=("Hindsight unreachable (probe HTTP $gate_code) and down-since cannot be persisted: alerting rather than staying silent")
+else
+  down_since=$(<"$state_file")
+  since=$(date -d "$down_since" +%s 2>/dev/null) || since=0
+  age=$(( $(date +%s) - since ))
+  if (( age >= DOWN_GRACE )); then
+    down_hard=1; mins=$(( age / 60 ))
+    problems+=("Hindsight unreachable for $mins min (down since $down_since): restart grace ($((DOWN_GRACE / 60)) min) over -- an outage, not a restart")
+    # falls through to the create block; the live checks below are skipped (down_hard), they
+    # would only repeat the connection errors
+  else
+    echo "Hindsight still unreachable since $down_since (${age}s): staying quiet until $((DOWN_GRACE / 60)) min of down time (FOV-3002a)"
     exit 0
   fi
 fi
 routes=$(docker inspect hindsight --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
   | sed -n 's/^HINDSIGHT_API_LLM_REQUEST_BANK_MODELS=//p')
 alias=$(tr ',' '\n' <<<"$routes" | sed -n "s/^$bank=\([^=]*\)$/\1/p" | head -1)
-if [[ -n "$bank" && -z "$alias" ]]; then
+if [[ -z "$down_hard" && -n "$bank" && -z "$alias" ]]; then
   problems+=("bank $bank is not in HINDSIGHT_API_LLM_REQUEST_BANK_MODELS (\"$routes\"): its LLM calls use the hosted server model")
 fi
 
 started=$(docker inspect hindsight --format '{{.State.StartedAt}}' 2>/dev/null)
-if [[ -z "$started" ]]; then
+if [[ -n "$down_hard" ]]; then :  # down-hard: the unreachability problem above is the whole report
+elif [[ -z "$started" ]]; then
   problems+=("cannot inspect the hindsight container")
 elif [[ -n "$bank" ]]; then
   until=$(date -u -d "$started + 10 minutes" +%FT%TZ)
@@ -69,7 +101,7 @@ elif [[ -n "$bank" ]]; then
   fi
 fi
 
-if [[ -n "$bank" ]]; then
+if [[ -z "$down_hard" && -n "$bank" ]]; then
   cfg=$(curl -s -m 20 -w '\n%{http_code}' "$HS/banks/$bank/config")
   code=${cfg##*$'\n'}
   if [[ "$code" == 401 ]]; then problems+=("reading $bank config: authentication failed (HTTP 401)")
@@ -112,6 +144,7 @@ fi
 # query embedding. That proves the write path behind the hosted-call check regardless of traffic:
 # server-wide row counts are legitimately zero for up to ~70 min in quiet hours (the old canary
 # false-alerted at night), but a real recall always traces.
+if [[ -z "$down_hard" ]]; then
 PROBE_BANK=route-check-probe   # scratch: no memories, rerank off; its rows are swept by retention
 probe_rows() { docker exec hindsight sh -c 'PGPASSWORD=$(python3 -c "import json;print(json.load(open(\"/home/hindsight/.pg0/instances/hindsight/instance.json\"))[\"password\"])") \
   /home/hindsight/.pg0/installation/*/bin/psql -h 127.0.0.1 -U hindsight -d hindsight -Atc \
@@ -141,11 +174,19 @@ else
     problems+=("recall tracing probe succeeded but wrote no llm_requests row: LLM tracing is off, so the hosted-call check is blind")
   fi
 fi
+fi
 
 (( ${#problems[@]} == 0 )) && { echo "ok (bank=$bank)"; exit 0; }
 problem=$(printf -- '- %s\n' "${problems[@]}")
 echo "ALERT:"; echo "$problem"
 (( DRY )) && exit 0
+
+title="OPS: Hindsight bank $bank may be leaving the house"
+tldr="TL;DR: Hindsight bank $bank may be using hosted models again (Ema: register row K2, FOV-2938; Intern: FOV-2962). Fix the routing (runbook: multica-local-workdir hindsight/README.md, \"Per-bank LLM routing\")."
+if [[ -n "$down_hard" ]]; then
+  title="OPS: Hindsight down for $mins min (restart grace over)"
+  tldr="TL;DR: Hindsight has been unreachable for $mins min (down since $down_since) -- the $((DOWN_GRACE / 60)) min restart grace in \`hindsight/ema-route-check.sh\` (FOV-3002a) expired. Restart it or treat as an outage; bank $bank routing cannot be checked while it is down."
+fi
 
 if ! list=$(multica issue list --metadata "alert_key=$ALERT_KEY" --limit 50 --output json --fields id,status); then
   echo "multica issue list failed; not creating an issue (would risk duplicates)" >&2; exit 1
@@ -158,7 +199,7 @@ printf '%s\n\n%s\n\n%s\n' \
   "TL;DR: Hindsight bank $bank may be using hosted models again (Ema: register row K2, FOV-2938; Intern: FOV-2962). Fix the routing (runbook: multica-local-workdir hindsight/README.md, \"Per-bank LLM routing\")." \
   "$problem" \
   "Raised by \`hindsight/ema-route-check.sh\` on devbox3 (timer \`ema-route-check.timer\` or \`intern-route-check.timer\`, FOV-2945). It stays quiet while this issue is open." > description.md
-out=$(multica issue create --title "OPS: Hindsight bank $bank may be leaving the house" --description-file description.md \
+out=$(multica issue create --title "$title" --description-file description.md \
   --assignee-id "$DSA_ID" --priority urgent --output json) || { echo "FAILED to create alert issue" >&2; exit 1; }
 new=$(jq -er .id <<<"$out") || { echo "created an issue but cannot parse its id" >&2; exit 1; }
 multica issue metadata set "$new" --key alert_key --value "$ALERT_KEY" >/dev/null \

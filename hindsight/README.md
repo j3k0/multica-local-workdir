@@ -200,6 +200,16 @@ reflect, which still times out at 300 s on the tripster pool.
   (rerank off, no memories) and requires the recall to have traced one `llm_requests` row --
   proof the table is still being written. A server-wide row-count canary would not do: quiet
   hours write no rows for up to ~70 min and false-alerted at night (FOV-3010).
+  If Hindsight is unreachable, the check stays quiet for up to 30 min of down time: "up"
+  means the bank config answers HTTP < 500 and Hindsight's embedded Postgres answers
+  "select 1" (a booting server can 503 or serve while its DB is still initialising). Each
+  down cycle records down-since under `~/.local/state/hindsight-route-check/`; past the 30
+  min restart grace (maximum silence ~45 min with cycle timing) it alerts as an outage --
+  "Hindsight unreachable for N min" -- instead of a routing problem (FOV-3002, hardening in
+  FOV-3002a; covers restart windows, crash loops and dead containers). The outage alert
+  dedupes under its own key (`<alert_key>-outage`) so an open routing issue cannot silence
+  it, and a corrupt down-since record (unparsable or from a clock jump) restarts the grace
+  clock rather than trusting it.
   Spend logs can't do the hosted-call check: their rows carry no bank id. `--dry-run` prints
   the verdict.
   `intern-route-check.timer` runs the same script with `ROUTE_BANK=agent-intern`

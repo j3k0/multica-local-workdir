@@ -195,8 +195,13 @@ reflect, which still times out at 300 s on the tripster pool.
   missing from the route map, the extension logged no route at startup, reranking is back on,
   one of the no-model settings is undone, the bank made a model call (consolidation, reflect,
   or retain outside chunks mode) with no routed call, or Hindsight's `llm_requests` shows a
-  call for the bank on any model other than its route (hosted LLM or OpenRouter rerank).
-  Spend logs can't do the last one: their rows carry no bank id. `--dry-run` prints the verdict.
+  call for the bank on any model other than its route (hosted LLM or OpenRouter rerank), or
+  its tracing probe failed: the check recalls once on the scratch bank `route-check-probe`
+  (rerank off, no memories) and requires the recall to have traced one `llm_requests` row --
+  proof the table is still being written. A server-wide row-count canary would not do: quiet
+  hours write no rows for up to ~70 min and false-alerted at night (FOV-3010).
+  Spend logs can't do the hosted-call check: their rows carry no bank id. `--dry-run` prints
+  the verdict.
   `intern-route-check.timer` runs the same script with `ROUTE_BANK=agent-intern`
   (`alert_key=intern-hindsight-route`).
 - Alert "no-model settings undone": someone changed the bank config. Re-apply with

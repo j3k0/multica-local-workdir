@@ -11,7 +11,10 @@
 #     chunks mode) in the last 20 min but no routed call in 60 min.
 #  5. Hindsight's own llm_requests log shows a call for the bank in the last 60 min on any model
 #     other than its routed alias (hosted LLM or OpenRouter rerank). Rows carry the bank id;
-#     LiteLLM_SpendLogs don't, so they can't be used for this.
+#     LiteLLM_SpendLogs don't, so they can't be used for this. To trust this the server must be
+#     seen writing llm_requests: the check recalls on a scratch bank, whose one query embedding
+#     must land as a row. Quiet hours write no rows for ~70 min legitimately (FOV-3010), so a
+#     row-count canary alone could not tell "quiet" from "tracing off".
 # Alert = one open urgent Multica issue (metadata alert_key=$ALERT_KEY), assigned to DSA.
 # Other banks: ROUTE_BANK=<bank> ALERT_KEY=<key> (no LiteLLM key lookup), e.g. agent-intern.
 # Usage: ema-route-check.sh [--dry-run]
@@ -75,20 +78,51 @@ if [[ -n "$bank" ]]; then
   db=$(docker exec hindsight sh -c 'PGPASSWORD=$(python3 -c "import json;print(json.load(open(\"/home/hindsight/.pg0/instances/hindsight/instance.json\"))[\"password\"])") \
     /home/hindsight/.pg0/installation/*/bin/psql -h 127.0.0.1 -U hindsight -d hindsight -AtF" " -c "
     select count(*) filter (where operation='"'"'reflect'"'"' and started_at > now()-interval '"'"'20 minutes'"'"'),
-           count(*) filter (where provider is distinct from '"'"'tei'"'"' and model is distinct from '"'"'$1'"'"'),
-           (select count(*) from llm_requests where started_at > now()-interval '"'"'60 minutes'"'"')
+           count(*) filter (where provider is distinct from '"'"'tei'"'"' and model is distinct from '"'"'$1'"'"')
     from llm_requests where bank_id='"'"'$0'"'"' and started_at > now()-interval '"'"'60 minutes'"'"'"' "$bank" "$alias" 2>&1)
-  if [[ ! "$db" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ ]]; then
+  if [[ ! "$db" =~ ^[0-9]+\ [0-9]+$ ]]; then
     problems+=("cannot read Hindsight llm_requests for $bank (got: ${db:0:150})")
   else
-    read -r reflects hosted total <<<"$db"
-    # Canary: check 5 is blind if Hindsight stops writing llm_requests (trace off, schema change).
-    (( total == 0 )) && problems+=("Hindsight wrote 0 llm_requests rows server-wide in 60 min: LLM tracing may be off, so the hosted-call check is blind")
+    read -r reflects hosted <<<"$db"
     active=$((active + reflects))
     (( hosted > 0 )) && problems+=("$bank made $hosted LLM/rerank call(s) in 60 min on a model other than ${alias:-its route}: hosted model or OpenRouter rerank")
   fi
   if (( active > 0 && routed == 0 )); then
     problems+=("$bank had $active model-call event(s) (consolidation/reflect/retain) in 20 min but no routed LLM call in 60 min")
+  fi
+fi
+
+# Tracing probe (FOV-3010): a recall on a scratch bank must leave one llm_requests row -- its
+# query embedding. That proves the write path behind the hosted-call check regardless of traffic:
+# server-wide row counts are legitimately zero for up to ~70 min in quiet hours (the old canary
+# false-alerted at night), but a real recall always traces.
+PROBE_BANK=route-check-probe   # scratch: no memories, rerank off; its rows are swept by retention
+probe_rows() { docker exec hindsight sh -c 'PGPASSWORD=$(python3 -c "import json;print(json.load(open(\"/home/hindsight/.pg0/instances/hindsight/instance.json\"))[\"password\"])") \
+  /home/hindsight/.pg0/installation/*/bin/psql -h 127.0.0.1 -U hindsight -d hindsight -Atc \
+  "select count(*) from llm_requests where bank_id='"'"'$0'"'"' and started_at > now()-interval '"'"'5 minutes'"'"'"' "$PROBE_BANK" 2>&1; }
+curl -s -m 20 -o /dev/null -X PUT "$HS/banks/$PROBE_BANK" -H 'content-type: application/json' -d "{\"name\":\"$PROBE_BANK\"}"
+rcfg=$(curl -s -m 20 "$HS/banks/$PROBE_BANK/config" | jq -r '.config.enable_reranking')
+[[ "$rcfg" == false ]] || curl -s -m 20 -o /dev/null -X PATCH "$HS/banks/$PROBE_BANK/config" \
+  -H 'content-type: application/json' -d '{"updates":{"enable_reranking":false}}'
+probe=$(curl -s -m 60 -w '\n%{http_code}' -X POST "$HS/banks/$PROBE_BANK/memories/recall" \
+  -H 'content-type: application/json' -d '{"query":"route check tracing probe"}')
+pcode=${probe##*$'\n'}
+if [[ -z "$pcode" ]]; then
+  problems+=("recall tracing probe got no response (recall endpoint unreachable or timed out)")
+elif [[ "$pcode" == 401 ]]; then
+  problems+=("recall tracing probe: authentication failed (HTTP 401)")
+elif [[ "$pcode" == 403 ]]; then
+  problems+=("recall tracing probe: permission denied (HTTP 403)")
+elif [[ "$pcode" != 200 ]]; then
+  pbody=${probe%$'\n'*}
+  problems+=("recall tracing probe: HTTP $pcode ${pbody:0:200}")
+else
+  prow=$(probe_rows)   # the row lands with the query embedding, before the response
+  if [[ "$prow" == 0 ]]; then sleep 3; prow=$(probe_rows); fi
+  if [[ ! "$prow" =~ ^[0-9]+$ ]]; then
+    problems+=("cannot read llm_requests for the tracing probe (got: ${prow:0:200})")
+  elif (( prow == 0 )); then
+    problems+=("recall tracing probe succeeded but wrote no llm_requests row: LLM tracing is off, so the hosted-call check is blind")
   fi
 fi
 

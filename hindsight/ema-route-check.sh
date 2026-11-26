@@ -16,8 +16,8 @@
 #     must land as a row. Quiet hours write no rows for ~70 min legitimately (FOV-3010), so a
 #     row-count canary alone could not tell "quiet" from "tracing off". The probe itself never
 #     spends: its bank is held in the no-model set with rerank off, the recall runs only when
-#     rerank=false is verified (FOV-3011), and connectivity blips alert only after two consecutive
-#     runs (FOV-3011).
+#     rerank=false is verified (FOV-3011), and connectivity blips alert only on the second
+#     consecutive run of the same timer (per-alert-key state file, FOV-3011).
 # Alert = one open urgent Multica issue (metadata alert_key=$ALERT_KEY), assigned to DSA.
 # Other banks: ROUTE_BANK=<bank> ALERT_KEY=<key> (no LiteLLM key lookup), e.g. agent-intern.
 # Usage: ema-route-check.sh [--dry-run]
@@ -32,7 +32,7 @@ problems=()
 
 # ROUTE_BANK (or EMA_BANK, tests) skips the LiteLLM key lookup.
 bank=${ROUTE_BANK:-${EMA_BANK:-}}
-[[ -n "$bank" ]] || bank=$(docker exec litellm-postgres psql -U litellm -d litellm -Atc \
+[[ -n "$bank" ]] || bank=$(docker exec -e PGCONNECT_TIMEOUT=10 litellm-postgres psql -U litellm -d litellm -Atc \
   "select metadata->>'hindsight_bank' from \"LiteLLM_VerificationToken\" where key_alias='$KEY_ALIAS'" 2>&1)
 if [[ ! "$bank" =~ ^[a-z0-9-]+$ ]]; then
   problems+=("cannot read the bank of key $KEY_ALIAS from LiteLLM (got: ${bank:0:100})"); bank=""
@@ -91,7 +91,7 @@ if [[ -n "$bank" ]]; then
   active=$(docker logs --since 20m hindsight 2>&1 | grep -cE "$pat")
   routed=$(grep -c "bank_llm_routes: bank=$bank " <<<"$logs")
   # Password stays inside the container.
-  db=$(docker exec hindsight sh -c 'PGPASSWORD=$(python3 -c "import json;print(json.load(open(\"/home/hindsight/.pg0/instances/hindsight/instance.json\"))[\"password\"])") \
+  db=$(docker exec hindsight sh -c 'PGCONNECT_TIMEOUT=10 PGPASSWORD=$(python3 -c "import json;print(json.load(open(\"/home/hindsight/.pg0/instances/hindsight/instance.json\"))[\"password\"])") \
     /home/hindsight/.pg0/installation/*/bin/psql -h 127.0.0.1 -U hindsight -d hindsight -AtF" " -c "
     select count(*) filter (where operation='"'"'reflect'"'"' and started_at > now()-interval '"'"'20 minutes'"'"'),
            count(*) filter (where provider is distinct from '"'"'tei'"'"' and model is distinct from '"'"'$1'"'"')
@@ -112,27 +112,33 @@ fi
 # llm_requests row since this run started -- its query embedding. That proves the write path
 # behind the hosted-call check regardless of traffic: server-wide row counts are legitimately
 # zero for up to ~70 min in quiet hours (the old canary false-alerted at night), but a real
-# recall always traces. Rows are written by the tracing buffer (flushed every 0.5 s), so they
-# can land after the 200 response: counting a baseline first and requiring an increase, with the
-# 3 s retry, is what makes the check sound -- and it keeps a same-minute sibling timer run from
-# passing on the other run's row (both timers fire on *:0/15, FOV-3011).
+# recall always traces. Rows are written by the tracing buffer (flushed every 0.5 s) and can
+# land after the 200 response, so the count is taken against a timestamp read just before the
+# recall, with one 3 s retry on a zero (FOV-3011 review): a sibling timer run's earlier row
+# cannot count for this run, and no 5-min-window row can age out of the compare.
 PROBE_BANK=route-check-probe   # scratch: no memories; held in the no-model set below, rerank off
 # Connectivity-class probe failures (no HTTP answer for our calls, psql refuses) alert only on
 # the second consecutive run: a single-run blip used to open an urgent issue that silenced the
 # whole check until a human closed it (FOV-3002 pattern). Definitive failures (401/403/HTTP,
-# no row) alert at once. State file like openrouter-alert.sh, cleared on every clean verdict.
+# no row) alert at once. State file like openrouter-alert.sh, PER ALERT KEY: both timers run
+# this script about a minute apart, so a shared file would let the second timer's first-ever
+# failure alert (FOV-3011 review). Cleared on every clean verdict, never touched by --dry-run.
 PROBE_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/ema-route-check"; mkdir -p "$PROBE_STATE_DIR"
-PROBE_DOWN="$PROBE_STATE_DIR/probe-connectivity-failed"
+PROBE_DOWN="$PROBE_STATE_DIR/probe-connectivity-failed-$ALERT_KEY"
 probe_conn_fail() {  # 0: second consecutive failure, alert now; 1: recorded, stay quiet this run
-  if [[ -e "$PROBE_DOWN" ]]; then rm -f "$PROBE_DOWN"; problems+=("$1"); return 0; fi
-  printf '%s\n' "first failure at $(date -u '+%FT%TZ'): $1" >"$PROBE_DOWN" 2>/dev/null || true
+  if [[ -e "$PROBE_DOWN" ]]; then (( DRY )) || rm -f "$PROBE_DOWN"; problems+=("$1"); return 0; fi
+  (( DRY )) || printf '%s\n' "first failure at $(date -u '+%FT%TZ'): $1" >"$PROBE_DOWN" 2>/dev/null || true
   echo "probe connectivity failure, not alerting yet (one more run opens an alert): $1"; return 1
 }
-probe_ok() { rm -f "$PROBE_DOWN" 2>/dev/null || true; }
-probe_rows() { docker exec hindsight sh -c 'PGPASSWORD=$(python3 -c "import json;print(json.load(open(\"/home/hindsight/.pg0/instances/hindsight/instance.json\"))[\"password\"])") \
+probe_ok() { (( DRY )) || rm -f "$PROBE_DOWN" 2>/dev/null || true; }
+probe_ts() { docker exec hindsight sh -c 'PGCONNECT_TIMEOUT=10 PGPASSWORD=$(python3 -c "import json;print(json.load(open(\"/home/hindsight/.pg0/instances/hindsight/instance.json\"))[\"password\"])") \
   /home/hindsight/.pg0/installation/*/bin/psql -h 127.0.0.1 -U hindsight -d hindsight -Atc \
-  "select count(*) from llm_requests where bank_id='"'"'$0'"'"' and started_at > now()-interval '"'"'5 minutes'"'"'"' "$PROBE_BANK" 2>&1; }
-before=$(probe_rows)   # baseline: both timers can put their rows inside this 5-min window
+  "select clock_timestamp()"' 2>&1; }
+probe_rows_since() { docker exec hindsight sh -c 'PGCONNECT_TIMEOUT=10 PGPASSWORD=$(python3 -c "import json;print(json.load(open(\"/home/hindsight/.pg0/instances/hindsight/instance.json\"))[\"password\"])") \
+  /home/hindsight/.pg0/installation/*/bin/psql -h 127.0.0.1 -U hindsight -d hindsight -Atc \
+  "select count(*) from llm_requests where bank_id='"'"'$0'"'"' and started_at >= '"'"'$1'"'"'::timestamptz"' "$PROBE_BANK" "$1" 2>&1; }
+since=$(probe_ts)   # rows must land after this instant: a sibling timer run's earlier row can't
+                    # count for this run, and no 5-min window row can age out behind the compare
 proceed=1              # recall only once enable_reranking=false is verified for this run
 pcode=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X PUT "$HS/banks/$PROBE_BANK" \
   -H 'content-type: application/json' -d "{\"name\":\"$PROBE_BANK\"}")
@@ -209,14 +215,13 @@ if (( proceed )); then
   elif [[ "$pcode" != 200 ]]; then
     probe_ok; pbody=${probe%$'\n'*}; problems+=("recall tracing probe: HTTP $pcode ${pbody:0:200}")
   else
-    prow=$(probe_rows)
-    # Equal to baseline (or zero with a failed baseline) can mean the buffered row is not in yet.
-    if [[ "$prow" == "$before" || ( ! "$before" =~ ^[0-9]+$ && "$prow" == 0 ) ]]; then sleep 3; prow=$(probe_rows); fi
+    prow=$(probe_rows_since "$since")
+    if [[ "$prow" =~ ^[0-9]+$ ]] && (( prow == 0 )); then sleep 3; prow=$(probe_rows_since "$since"); fi
     if [[ ! "$prow" =~ ^[0-9]+$ ]]; then
       probe_conn_fail "cannot read llm_requests for the tracing probe (got: ${prow:0:150})" || true
-    elif [[ ( "$before" =~ ^[0-9]+$ && "$prow" -le "$before" ) || "$prow" == 0 ]]; then
+    elif (( prow == 0 )); then
       probe_ok
-      problems+=("recall tracing probe succeeded but llm_requests gained no NEW row (after=$prow, baseline=${before:-failed}): LLM tracing is off, so the hosted-call check is blind")
+      problems+=("recall tracing probe succeeded but wrote no llm_requests row since $since: LLM tracing is off, so the hosted-call check is blind")
     else
       probe_ok
     fi
